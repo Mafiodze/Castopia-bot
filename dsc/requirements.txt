@@ -1,0 +1,6 @@
+aiohttp
+discord.py
+beautifulsoup4
+aiocache
+python-dotenv
+актуальные версии
