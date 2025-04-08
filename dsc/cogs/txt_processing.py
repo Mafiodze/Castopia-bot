@@ -40,7 +40,7 @@ class TextProcessing(commands.Cog):
         return sentence.strip()
     
     @staticmethod
-    def extract_sentence(text: str, query: str, window: int = 2) -> str:
+    def extract_sentence(text: str, query: str) -> str:
         """Извлекает предложение с ключевыми словами.
 
         Args:
