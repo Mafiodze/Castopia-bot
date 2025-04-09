@@ -15,7 +15,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
 class SearchResultsView(View):
-    def __init__(self, results: List[Tuple[int, str, str, str]], ctx: commands.Context, footer_text: str, timeout: float = 60.0):
+    def __init__(self, results: List[Tuple[int, str, str, str]], ctx: commands.Context, footer_text: str, timeout: float = 60.0) -> None:
         super().__init__(timeout=timeout)
         self.results = results
         self.ctx = ctx
@@ -33,40 +33,24 @@ class SearchResultsView(View):
         embed.timestamp = self.ctx.message.created_at
         return embed
 
-    async def update_message(self, interaction: discord.Interaction):
+    async def update_message(self, interaction: discord.Interaction) -> None:
         for child in self.children:
             if isinstance(child, Button):
                 child.disabled = (self.page <= 1 if child.custom_id == "previous_page" else self.page >= self.total_pages)
         await interaction.response.edit_message(embed=self.create_embed(), view=self)
 
     @discord.ui.button(label="⬅️", style=discord.ButtonStyle.primary, custom_id="previous_page")
-    async def previous_page(self, interaction, _):
+    async def previous_page(self, interaction, _) -> None:
         if self.page > 1: self.page -= 1; await self.update_message(interaction)
         else: await interaction.response.send_message("Это первая страница.", ephemeral=True)
 
     @discord.ui.button(label="➡️", style=discord.ButtonStyle.primary, custom_id="next_page")
-    async def next_page(self, interaction, _):
+    async def next_page(self, interaction, _) -> None:
         if self.page < self.total_pages: self.page += 1; await self.update_message(interaction)
         else: await interaction.response.send_message("Это последняя страница.", ephemeral=True)
 
 class DscCog(commands.Cog):
-    """Класс для работы с ботом.
-
-    Args:
-        commands (_type_): Класс для работы с командами.
-        WikiScraper (_type_): Класс для парсинга статей на Castopia Wiki.
-    """
     def __init__(self, bot: commands.Bot) -> None:
-        """Инициализация класса.
-
-        Args:
-            bot (commands.Bot): Экземпляр бота.
-            base_url (str): Основная ссылка.
-            start_page_url (str): Ссылка со списком всех страниц.
-            tags_url (str): Ссылка с тегами.
-            headers (dict): Заголовки.
-            max_concurrent_requests (int): Максимальное кол-во запросов.
-        """
         self.bot = bot
         self.session: aiohttp.ClientSession = aiohttp.ClientSession()
         self.semaphore = asyncio.Semaphore(5)
@@ -74,15 +58,6 @@ class DscCog(commands.Cog):
 
     @commands.command(name="settings")
     async def user_settings(self, ctx: commands.Context, value: str) -> None:
-        """Настройка бота для пользователя.
-
-        Args:
-            ctx (commands.Context): Контекст команды.
-            value (str): Значение настройки.
-
-        Returns:
-            _type_: Сообщение о результате настройки.
-        """
         if value.lower() not in {"викидот", "зеркало"}:
             return await ctx.send("Неверное значение.")
         try:
@@ -97,15 +72,6 @@ class DscCog(commands.Cog):
 
     @commands.command(name="help")
     async def show_help(self, ctx: commands.Context, command: str = 0) -> None:
-        """Показывает список всех команд или описание конкретной команды.
-
-        Args:
-            ctx (commands.Context): Контекст команды.
-            command (str, optional): Команда, которую ввел пользователь. По умолчанию 0.
-
-        Returns:
-            _type_: Сообщение с описанием команды.
-        """
         desc = {
             "help": "Выдает список всех команд...",
             "randompage": "Случайная страница...",
@@ -126,11 +92,6 @@ class DscCog(commands.Cog):
 
     @commands.command(name="randompage")
     async def send_random_page(self, ctx: commands.Context) -> None:
-        """Отправляет случайную страницу.
-
-        Args:
-            ctx (commands.Context): Контекст команды.
-        """
         pref = Settings.get_user_setting(str(ctx.author.id))
         self.scraper.update_scraper_urls(pref)
 
@@ -146,18 +107,6 @@ class DscCog(commands.Cog):
 
     @commands.command(name="tags")
     async def search_with_tags(self, ctx: commands.Context, *tags: str) -> None:
-        """Поиск статей по тегам.
-
-        Args:
-            ctx (commands.Context): Контекст команды.
-            *entered_tags (str): Теги для поиска.
-
-        Returns:
-            _type_: Сообщение с результатами поиска.
-
-        Yields:
-            _type_: Список статей по тегам.
-        """
         if not tags: return await ctx.send("Укажите хотя бы один тег.")
 
         pref = Settings.get_user_setting(str(ctx.author.id))
@@ -183,15 +132,6 @@ class DscCog(commands.Cog):
 
     @commands.command(name="search")
     async def search_name(self, ctx: commands.Context, *, pagename: str) -> None:
-        """Поиск статьи по названию.
-
-        Args:
-            ctx (commands.Context): Контекст команды.
-            pagename (str): Название статьи.
-
-        Returns:
-            _type_: Сообщение с результатом поиска.
-        """
         pref = Settings.get_user_setting(str(ctx.author.id))
         self.scraper.update_scraper_urls(pref)
 
@@ -203,9 +143,9 @@ class DscCog(commands.Cog):
         html = await self.scraper.fetch_html(u, self.session)
         soup = BeautifulSoup(html, "lxml")
         content = soup.find("div", id="page-content")
-        if content:
-            [e.decompose() for e in content.find_all("div", class_="no-style")]
-            text = content.get_text(" ", strip=True)
+        if content: [e.decompose() for e in content.find_all("div", class_="no-style")]
+        else: return await ctx.send("Нет доступа к содержимому.")
+        text = content.get_text(" ", strip=True)
         sent = text.split(".")[0].strip() + "." if text else "Содержимое не найдено."
         embed = discord.Embed(title=t, description=sent, url=u, color=discord.Color.dark_red())
         embed.set_footer(text=FOOTER_TEXT)
@@ -214,15 +154,6 @@ class DscCog(commands.Cog):
 
     @commands.command(name="fullsearch")
     async def search_excerpt(self, ctx: commands.Context, *, query: str) -> None:
-        """Поиск статьи по отрывку.
-    
-        Args:
-            ctx (commands.Context): Контекст команды.
-            query (str): Отрывок для поиска.
-    
-        Returns:
-            _type_: Сообщение с результатом поиска.
-        """
         pref = Settings.get_user_setting(str(ctx.author.id))
         self.scraper.update_scraper_urls(pref)
     
@@ -251,9 +182,4 @@ class DscCog(commands.Cog):
         await ctx.send(embed=view.create_embed(), view=view)
 
 async def setup(bot) -> None:
-    """Глобальная функция для инициализации кога.
-
-    Args:
-        bot (_type_): Экземпляр бота.
-    """
     await bot.add_cog(DscCog(bot))

@@ -4,7 +4,6 @@ class Dsc(commands.Cog):
     def __init__(self, bot) -> None:
         self.bot = bot
 
-# URL для основного сайта и зеркала
 BASE_URL = "http://castopia-wiki.wikidot.com"
 START_PAGE_URL = f"{BASE_URL}/system:all-pages"
 TAGS_URL = f"{BASE_URL}/system:page-tags"
@@ -13,7 +12,6 @@ BASE_URL_MIRROR = "https://castopia.obscurative.ru"
 START_PAGE_URL_MIRROR = f"{BASE_URL_MIRROR}/system:all-pages"
 TAGS_URL_MIRROR = f"{BASE_URL_MIRROR}/system:page-tags"
 
-# Заголовки и системные теги
 HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                    "AppleWebKit/537.36 (KHTML, like Gecko) "

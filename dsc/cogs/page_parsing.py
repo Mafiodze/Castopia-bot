@@ -14,34 +14,13 @@ from .constants import (
 )
 
 def article_links_decorator(func) -> None:
-    """Декоратор для получения ссылок на статьи с проверкой на системные теги.
-
-    Args:
-        func (_type_): Асинхронная функция для получения ссылок на статьи.
-    """
     async def wrapper(*args, **kwargs) -> List[Tuple[str, str]]:
-        """Обертка для асинхронной функции.
-
-        Returns:
-            _type_: Результат выполнения асинхронной функции.
-        """
         return await func(*args, **kwargs)
     return wrapper
 
 class WikiScraper():
-    """Класс для парсинга статей на Castopia Wiki.
-    """
     def __init__(self, bot, base_url: str, start_page_url: str, tags_url: str,
                  max_concurrent_requests: int = 5) -> None:
-        """Инициализация класса.
-
-        Args:
-            base_url (str):
-            start_page_url (str):
-            tags_url (str):
-            headers (dict):
-            max_concurrent_requests (int, optional): Defaults to 5.
-        """
         self.base_url = base_url
         self.start_page_url = start_page_url
         self.tags_url = tags_url
@@ -52,11 +31,6 @@ class WikiScraper():
         self.bot = bot
 
     def update_scraper_urls(self, pref: str) -> None:
-        """Обновляет URL-адреса в WikiScraper в зависимости от настроек пользователя.
-
-        Args:
-            pref (str): Настройки пользователя (викидот или зеркало).
-        """
         mirror = pref == "зеркало"
         self.base_url = BASE_URL_MIRROR if mirror else BASE_URL
         self.start_page_url = START_PAGE_URL_MIRROR if mirror else START_PAGE_URL
@@ -64,19 +38,6 @@ class WikiScraper():
 
     @cached(ttl=300, key_builder=lambda f, self, url, *a, **k: url, cache=Cache.MEMORY)
     async def fetch_html(self, url: str, session: aiohttp.ClientSession, retry: int = 3) -> str:
-        """Загружает HTML-код страницы по URL.
-
-        Args:
-            url (str): URL страницы.
-            session (aiohttp.ClientSession): Сессия aiohttp.
-            retry (int, optional): Количество попыток. Defaults to 3.
-
-        Raises:
-            e: Ошибка при загрузке страницы.
-
-        Returns:
-            str: HTML-код страницы.
-        """
         for attempt in range(retry):
             try:
                 async with self.semaphore:
@@ -92,14 +53,6 @@ class WikiScraper():
         return ""
 
     async def get_total_pages(self, session: aiohttp.ClientSession) -> int:
-        """Получает количество страниц пагинации.
-
-        Args:
-            session (aiohttp.ClientSession): Сессия aiohttp.
-
-        Returns:
-            int: Количество страниц пагинации.
-        """
         html = await self.fetch_html(self.start_page_url, session)
         soup = BeautifulSoup(html, "lxml")
         span = soup.find("span", class_="pager-no")
@@ -118,15 +71,6 @@ class WikiScraper():
 
     @article_links_decorator
     async def get_article_links_from_page(self, page_url: str, session: aiohttp.ClientSession) -> List[Tuple[str, str]]:
-        """Получает ссылки на статьи со страницы.
-
-        Args:
-            page_url (str): URL страницы.
-            session (aiohttp.ClientSession): Сессия aiohttp.
-
-        Returns:
-            List[Tuple[str, str]]: Список кортежей (название статьи, URL).
-        """
         return await self.parse_links(await self.fetch_html(page_url, session))
 
     async def get_article_links_from_page_f(self, page_url: str, session: aiohttp.ClientSession):
@@ -149,25 +93,9 @@ class WikiScraper():
         return links
 
     async def get_all_article_links_f(self, session: aiohttp.ClientSession) -> List[Tuple[str, str]]:
-        """Получает все ссылки на статьи. (фильтрует по системным тегам)
-
-        Args:
-            session (aiohttp.ClientSession): Сессия aiohttp.
-
-        Returns:
-            List[Tuple[str, str]]: Список кортежей (название статьи, URL).
-        """
         return await self._get_all(session, self.get_article_links_from_page_f)
     
     async def get_all_article_links(self, session: aiohttp.ClientSession) -> List[Tuple[str, str]]:
-        """Получает все ссылки на статьи.
-
-        Args:
-            session (aiohttp.ClientSession): Сессия aiohttp.
-
-        Returns:
-            List[Tuple[str, str]]: Список кортежей (название статьи, URL).
-        """
         return await self._get_all(session, self.get_article_links_from_page)
     
     async def _get_all(self, session, fetcher):
@@ -179,18 +107,8 @@ class WikiScraper():
 
     
 class PageParsingCog(commands.Cog):
-    """Класс для инициализации кога.
-
-    Args:
-        commands (_type_): Наследует от класса commands.Cogs.
-    """
     def __init__(self, bot) -> None:
         self.bot = bot
 
 async def setup(bot) -> None:
-    """Глобальная функция для инициализации кога.
-
-    Args:
-        bot (_type_): Экземпляр бота.
-    """
     await bot.add_cog(PageParsingCog(bot))
