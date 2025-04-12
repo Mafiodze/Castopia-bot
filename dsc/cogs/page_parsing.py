@@ -13,11 +13,6 @@ from .constants import (
     HEADERS
 )
 
-def article_links_decorator(func) -> None:
-    async def wrapper(*args, **kwargs) -> List[Tuple[str, str]]:
-        return await func(*args, **kwargs)
-    return wrapper
-
 class WikiScraper():
     def __init__(self, bot, base_url: str, start_page_url: str, tags_url: str,
                  max_concurrent_requests: int = 5) -> None:
@@ -69,7 +64,6 @@ class WikiScraper():
                 links.append((title, urljoin(self.base_url, href)))
         return links
 
-    @article_links_decorator
     async def get_article_links_from_page(self, page_url: str, session: aiohttp.ClientSession) -> List[Tuple[str, str]]:
         return await self.parse_links(await self.fetch_html(page_url, session))
 
@@ -77,17 +71,19 @@ class WikiScraper():
         html = await self.fetch_html(page_url, session)
         soup = BeautifulSoup(html, "lxml")
         links = []
-        if (box := soup.find("div", class_="list-pages-box")):
-            for a in box.find_all("a"):
-                title = a.get_text(strip=True)
+        if soup.find("div", id="side-bar"): 
+            soup.find("div", id="side-bar").decompose()
+            box = soup.find("div", class_="list-pages-box")
+            for link in box.find_all("a"):
+                title = link.get_text(strip=True)
                 if title.lower() == "edit": continue
-                href = a.get("href")
+                href = link.get("href")
                 if not href: continue
                 full_url = urljoin(self.base_url, href)
                 tags_html = await self.fetch_html(full_url, session)
                 tags_soup = BeautifulSoup(tags_html, "lxml")
                 tags = tags_soup.find("div", class_="page-tags")
-                article_tags = {a.get_text(strip=True).lower() for a in tags.find_all("a")} if tags else set()
+                article_tags = {link.get_text(strip=True).lower() for link in tags.find_all("a")} if tags else set()
                 if article_tags & self.system_tags: continue
                 links.append((title, full_url))
         return links
@@ -105,7 +101,6 @@ class WikiScraper():
         results = await asyncio.gather(*tasks, return_exceptions=True)
         return [link for r in results if not isinstance(r, Exception) for link in r]
 
-    
 class PageParsingCog(commands.Cog):
     def __init__(self, bot) -> None:
         self.bot = bot

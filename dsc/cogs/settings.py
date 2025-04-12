@@ -1,4 +1,5 @@
 import json
+import os
 from discord.ext import commands
 
 class Settings(commands.Cog):
@@ -7,8 +8,9 @@ class Settings(commands.Cog):
 
     @staticmethod
     def get_user_setting(user_id: str) -> str:
+        settings_path = os.path.join(os.path.dirname(__file__), "../../user_settings.json")
         try:
-            with open("user_settings.json", "r", encoding="utf-8") as f:
+            with open(settings_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             data = {}

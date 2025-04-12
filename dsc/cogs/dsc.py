@@ -71,14 +71,14 @@ class DscCog(commands.Cog):
         await ctx.send(f"Настройки обновлены для {ctx.author.mention}: {value.lower()}")
 
     @commands.command(name="help")
-    async def show_help(self, ctx: commands.Context, command: str = 0) -> None:
+    async def show_help(self, ctx: commands.Context, command: str = "") -> None:
         desc = {
-            "help": "Выдает список всех команд...",
-            "randompage": "Случайная страница...",
-            "tags": "Статьи по тегам...",
-            "search": "Статьи по названию...",
-            "fullsearch": "Статьи по содержанию...",
-            "settings": "Настройки пользователя..."
+            "help": "Выдает список всех команд или описание конкретной команды.",
+            "randompage": "Выводит случайную страницу с сайта.",
+            "tags": "Ищет статьи по указанным тегам.",
+            "search": "Ищет статью по названию.",
+            "fullsearch": "Ищет статьи, содержащие указанный текст.",
+            "settings": "Настраивает предпочтения пользователя (викидот или зеркало)."
         }
         if command:
             cmd = self.bot.get_command(command)
@@ -92,15 +92,17 @@ class DscCog(commands.Cog):
 
     @commands.command(name="randompage")
     async def send_random_page(self, ctx: commands.Context) -> None:
-        pref = Settings.get_user_setting(str(ctx.author.id))
-        self.scraper.update_scraper_urls(pref)
+        user_settings = Settings.get_user_setting(str(ctx.author.id))
+        self.scraper.update_scraper_urls(user_settings)
 
         links = await self.scraper.get_all_article_links_f(self.session)
         links = [(t, u) for t, u in links if "draft:" not in u and "_" not in u]
         title, link = random.choice(links)
-        text = await self.fetch_article_text(link)
-        sent = text.split(".")[0].strip() + "." if text else "Содержимое не найдено."
-        embed = discord.Embed(title=title, description=sent, url=link, color=discord.Color.dark_red())
+        text = await self.scraper.fetch_html(link, self.session)
+        soup = BeautifulSoup(text, "lxml")
+        content = soup.find("div", id="page-content")
+        description = content.get_text(" ", strip=True).split(".")[0].strip() + "." if content else "Содержимое не найдено."
+        embed = discord.Embed(title=title, description=description, url=link, color=discord.Color.dark_red())
         embed.set_footer(text=FOOTER_TEXT)
         embed.timestamp = ctx.message.created_at
         await ctx.send(embed=embed)
@@ -109,8 +111,8 @@ class DscCog(commands.Cog):
     async def search_with_tags(self, ctx: commands.Context, *tags: str) -> None:
         if not tags: return await ctx.send("Укажите хотя бы один тег.")
 
-        pref = Settings.get_user_setting(str(ctx.author.id))
-        self.scraper.update_scraper_urls(pref)
+        user_settings = Settings.get_user_setting(str(ctx.author.id))
+        self.scraper.update_scraper_urls(user_settings)
 
         tag_url = f"{self.scraper.tags_url}/tag/{tags[0]}"
         html = await self.scraper.fetch_html(tag_url, self.session)
@@ -118,8 +120,8 @@ class DscCog(commands.Cog):
         articles = []
         for a in soup.select("#tagged-pages-list a"):
             title, href = a.get_text(strip=True), urljoin(self.scraper.base_url, a['href'])
-            text = await self.scraper.fetch_html(href, self.session)
-            soup_tags = BeautifulSoup(text, "lxml")
+            href_html = await self.scraper.fetch_html(href, self.session)
+            soup_tags = BeautifulSoup(href_html, "lxml")
             tags_div = soup_tags.find("div", class_="page-tags")
             page_tags = {t.get_text(strip=True).lower() for t in tags_div.find_all("a")} if tags_div else set()
             if set(tags).issubset(page_tags):
@@ -132,8 +134,8 @@ class DscCog(commands.Cog):
 
     @commands.command(name="search")
     async def search_name(self, ctx: commands.Context, *, pagename: str) -> None:
-        pref = Settings.get_user_setting(str(ctx.author.id))
-        self.scraper.update_scraper_urls(pref)
+        user_settings = Settings.get_user_setting(str(ctx.author.id))
+        self.scraper.update_scraper_urls(user_settings)
 
         links = await self.scraper.get_all_article_links(self.session)
         pattern = re.compile(rf"\b{re.escape(pagename.lower())}\b")
@@ -146,16 +148,16 @@ class DscCog(commands.Cog):
         if content: [e.decompose() for e in content.find_all("div", class_="no-style")]
         else: return await ctx.send("Нет доступа к содержимому.")
         text = content.get_text(" ", strip=True)
-        sent = text.split(".")[0].strip() + "." if text else "Содержимое не найдено."
-        embed = discord.Embed(title=t, description=sent, url=u, color=discord.Color.dark_red())
+        description = text.split(".")[0].strip() + "." if text else "Содержимое не найдено."
+        embed = discord.Embed(title=t, description=description, url=u, color=discord.Color.dark_red())
         embed.set_footer(text=FOOTER_TEXT)
         embed.timestamp = ctx.message.created_at
         await ctx.send(embed=embed)
 
     @commands.command(name="fullsearch")
     async def search_excerpt(self, ctx: commands.Context, *, query: str) -> None:
-        pref = Settings.get_user_setting(str(ctx.author.id))
-        self.scraper.update_scraper_urls(pref)
+        user_settings = Settings.get_user_setting(str(ctx.author.id))
+        self.scraper.update_scraper_urls(user_settings)
     
         articles = await self.scraper.get_all_article_links(self.session)
         results = []
