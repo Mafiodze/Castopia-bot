@@ -1,27 +1,30 @@
-import os, sys, discord
+import os
+import sys
+import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
-sys.path.insert(0, os.path.dirname(__file__))
-load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
+PARENT_DIR = os.path.dirname(os.path.dirname(__file__)) 
+sys.path.insert(0, PARENT_DIR)
+COGS_DIR = os.path.join(PARENT_DIR, "cogs")
+load_dotenv(os.path.join(PARENT_DIR, ".env"))
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-if not TOKEN:
-    raise ValueError("Ошибка: токен бота не найден. Проверьте .env файл!")
 
 class MyBot(commands.Bot):
-    async def setup_hook(self) -> None:
-        cogs_dir = os.path.join(os.path.dirname(__file__), "cogs")
-        if not os.path.exists(cogs_dir):
-            raise FileNotFoundError(f"Папка 'cogs' не найдена по пути {cogs_dir}")
-        for fn in os.listdir(cogs_dir):
-            if fn.endswith(".py") and fn != "__init__.py":
-                ext = f"cogs.{fn[:-3]}"
+    async def setup_hook(self):
+        if not os.path.exists(COGS_DIR):
+            raise FileNotFoundError(f"Папка 'cogs' не найдена по пути: {COGS_DIR}")
+
+        for file_name in os.listdir(COGS_DIR):
+            if file_name.endswith(".py") and file_name != "__init__.py":
+                extension_name = f"cogs.{file_name[:-3]}"
                 try:
-                    await self.load_extension(ext)
-                    print(f"Загружен модуль: {ext}")
+                    await self.load_extension(extension_name)
+                    print(f"Загружен модуль: {extension_name}")
                 except Exception as e:
-                    print(f"Ошибка загрузки модуля {ext}: {e}")
+                    print(f"Ошибка загрузки модуля {extension_name}: {e}")
 
 bot = MyBot(command_prefix='.', intents=discord.Intents.all(), help_command=None)
+
 if __name__ == "__main__":
     bot.run(TOKEN)
