@@ -1,18 +1,20 @@
-import asyncio
-import aiohttp
-import discord
 import json
 import random
 import re
+import asyncio
+import aiohttp
+import discord
 from typing import List, Tuple
-from .page_parsing import WikiScraper
-from .settings import Settings
-from .constants import FOOTER_TEXT, SYSTEM_TAGS, BASE_URL, START_PAGE_URL, TAGS_URL, HEADERS
-from .txt_processing import TextProcessing
-from discord.ext import commands
-from discord.ui import Button, View
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
+
+from .page_parsing import WikiScraper
+from .settings import Settings
+from .constants import FOOTER_TEXT, SYSTEM_TAGS, BASE_URL, START_PAGE_URL, TAGS_URL
+from .txt_processing import TextProcessing
+
+from discord.ext import commands
+from discord.ui import Button, View
 
 class SearchResultsView(View):
     def __init__(self, results: List[Tuple[int, str, str, str]], ctx: commands.Context, footer_text: str, timeout: float = 60.0) -> None:
@@ -25,7 +27,7 @@ class SearchResultsView(View):
         self.total_pages = (len(results) - 1) // self.results_per_page + 1
 
     def create_embed(self) -> discord.Embed:
-        start, end = (self.page - 1) * 5, self.page * 5
+        start, end = (self.page - 1) * self.results_per_page, self.page * self.results_per_page
         embed_pages_list = "\n".join([f"### [{t}]({u})\nСовпадений: {s}\n{sn}" for s, t, u, sn in self.results[start:end]])
         description = f"Найдено страниц: {len(self.results)}, показано топ-5, страница {self.page}/{self.total_pages}.\n{embed_pages_list}"
         embed = discord.Embed(title="Результаты поиска по отрывку", description=description, color=discord.Color.dark_red())
@@ -95,8 +97,8 @@ class DscCog(commands.Cog):
         user_settings = Settings.get_user_setting(str(ctx.author.id))
         self.scraper.update_scraper_urls(user_settings)
 
-        links = await self.scraper.get_all_article_links_f(self.session)
-        links = [(t, u) for t, u in links if "draft:" not in u and "_" not in u]
+        links = await self.scraper.get_links_f(self.session)
+        links = [(title, url) for title, url in links if "draft:" not in url and "_" not in url]
         title, link = random.choice(links)
         text = await self.scraper.fetch_html(link, self.session)
         soup = BeautifulSoup(text, "lxml")
@@ -118,15 +120,15 @@ class DscCog(commands.Cog):
         html = await self.scraper.fetch_html(tag_url, self.session)
         soup = BeautifulSoup(html, "lxml")
         articles = []
-        for a in soup.select("#tagged-pages-list a"):
-            title, href = a.get_text(strip=True), urljoin(self.scraper.base_url, a['href'])
+        for link in soup.select("#tagged-pages-list a"):
+            title, href = link.get_text(strip=True), urljoin(self.scraper.base_url, link['href'])
             href_html = await self.scraper.fetch_html(href, self.session)
             soup_tags = BeautifulSoup(href_html, "lxml")
             tags_div = soup_tags.find("div", class_="page-tags")
-            page_tags = {t.get_text(strip=True).lower() for t in tags_div.find_all("a")} if tags_div else set()
+            page_tags = {title.get_text(strip=True).lower() for title in tags_div.find_all("a")} if tags_div else set()
             if set(tags).issubset(page_tags):
                 articles.append(f"[{title}]({href})")
-        if not articles: return await ctx.send(f"По тегу {', '.join(tags)} ничего не найдено.")
+        if not articles: return await ctx.send(f"По тегам {', '.join(tags)} ничего не найдено.")
         embed = discord.Embed(title=f"Статьи с тегами {', '.join(tags)}", description="\n".join(articles), color=discord.Color.dark_red())
         embed.set_footer(text=FOOTER_TEXT)
         embed.timestamp = ctx.message.created_at
@@ -137,19 +139,18 @@ class DscCog(commands.Cog):
         user_settings = Settings.get_user_setting(str(ctx.author.id))
         self.scraper.update_scraper_urls(user_settings)
 
-        links = await self.scraper.get_all_article_links(self.session)
+        links = await self.scraper.get_links(self.session)
         pattern = re.compile(rf"\b{re.escape(pagename.lower())}\b")
-        titles = [(t, u) for t, u in links if pattern.search(t.lower())]
+        titles = [(title, url) for title, url in links if pattern.search(title.lower())]
         if not titles: return await ctx.send(f"Страница '{pagename}' не найдена.")
-        t, u = titles[0]
-        html = await self.scraper.fetch_html(u, self.session)
+        title, url = titles[0]
+        html = await self.scraper.fetch_html(url, self.session)
         soup = BeautifulSoup(html, "lxml")
         content = soup.find("div", id="page-content")
         if content: [e.decompose() for e in content.find_all("div", class_="no-style")]
         else: return await ctx.send("Нет доступа к содержимому.")
-        text = content.get_text(" ", strip=True)
-        description = text.split(".")[0].strip() + "." if text else "Содержимое не найдено."
-        embed = discord.Embed(title=t, description=description, url=u, color=discord.Color.dark_red())
+        text = content.get_text(" ", strip=True).split(".")[0].strip() + "." if content else "Содержимое не найдено."
+        embed = discord.Embed(title=title, description=text, url=url, color=discord.Color.dark_red())
         embed.set_footer(text=FOOTER_TEXT)
         embed.timestamp = ctx.message.created_at
         await ctx.send(embed=embed)
@@ -159,10 +160,10 @@ class DscCog(commands.Cog):
         user_settings = Settings.get_user_setting(str(ctx.author.id))
         self.scraper.update_scraper_urls(user_settings)
     
-        articles = await self.scraper.get_all_article_links(self.session)
+        articles = await self.scraper.get_links(self.session)
         results = []
         for title, url in articles:
-            if "draft:" in url: continue
+            if "draft:" in url or "admin" in url: continue
             html = await self.scraper.fetch_html(url, self.session)
             soup = BeautifulSoup(html, "lxml")
             content = soup.find("div", id="page-content")
@@ -170,7 +171,7 @@ class DscCog(commands.Cog):
                 [e.decompose() for e in content.find_all("div", class_="no-style")]
                 text = content.get_text(" ", strip=True)
             if query.lower() in text.lower():
-                snippet = TextProcessing.extract_sentence(text, query)
+                snippet = TextProcessing.extract_sentence_discord(text, query)
                 soup_tags = BeautifulSoup(await self.scraper.fetch_html(url, self.session), "lxml")
                 tags_div = soup_tags.find("div", class_="page-tags")
                 page_tags = {a.get_text(strip=True).lower() for a in tags_div.find_all("a")} if tags_div else set()

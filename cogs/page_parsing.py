@@ -64,10 +64,10 @@ class WikiScraper():
                 links.append((title, urljoin(self.base_url, href)))
         return links
 
-    async def get_article_links_from_page(self, page_url: str, session: aiohttp.ClientSession) -> List[Tuple[str, str]]:
+    async def get_links(self, page_url: str, session: aiohttp.ClientSession) -> List[Tuple[str, str]]:
         return await self.parse_links(await self.fetch_html(page_url, session))
 
-    async def get_article_links_from_page_f(self, page_url: str, session: aiohttp.ClientSession):
+    async def get_links_f(self, page_url: str, session: aiohttp.ClientSession):
         html = await self.fetch_html(page_url, session)
         soup = BeautifulSoup(html, "lxml")
         links = []
@@ -88,11 +88,11 @@ class WikiScraper():
                 links.append((title, full_url))
         return links
 
-    async def get_all_article_links_f(self, session: aiohttp.ClientSession) -> List[Tuple[str, str]]:
-        return await self._get_all(session, self.get_article_links_from_page_f)
+    async def from_site_f(self, session: aiohttp.ClientSession) -> List[Tuple[str, str]]:
+        return await self._get_all(session, self.get_links_f)
     
-    async def get_all_article_links(self, session: aiohttp.ClientSession) -> List[Tuple[str, str]]:
-        return await self._get_all(session, self.get_article_links_from_page)
+    async def from_site(self, session: aiohttp.ClientSession) -> List[Tuple[str, str]]:
+        return await self._get_all(session, self.get_links)
     
     async def _get_all(self, session, fetcher):
         pages = await self.get_total_pages(session)

@@ -1,0 +1,6 @@
+aiohttp
+aiogram
+beautifulsoup4
+aiocache
+python-dotenv
+актуальные версии

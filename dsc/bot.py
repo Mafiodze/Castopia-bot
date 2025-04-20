@@ -16,7 +16,7 @@ class MyBot(commands.Bot):
             raise FileNotFoundError(f"Папка 'cogs' не найдена по пути: {COGS_DIR}")
 
         for file_name in os.listdir(COGS_DIR):
-            if file_name.endswith(".py") and file_name != "__init__.py":
+            if file_name.endswith(".py") and file_name != "__init__.py" and file_name != "tg.py":
                 extension_name = f"cogs.{file_name[:-3]}"
                 try:
                     await self.load_extension(extension_name)

@@ -1,6 +1,6 @@
 from discord.ext import commands
 
-class Dsc(commands.Cog):
+class Constants(commands.Cog):
     def __init__(self, bot) -> None:
         self.bot = bot
 
@@ -25,4 +25,4 @@ FOOTER_TEXT = ("Содержимое распространяется по ли�
                "© [2025] [mafiodze]. Все права защищены.")
 
 async def setup(bot) -> None:
-    await bot.add_cog(Dsc(bot))
+    await bot.add_cog(Constants(bot))
