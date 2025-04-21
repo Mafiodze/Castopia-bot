@@ -97,7 +97,7 @@ class DscCog(commands.Cog):
         user_settings = Settings.get_user_setting(str(ctx.author.id))
         self.scraper.update_scraper_urls(user_settings)
 
-        links = await self.scraper.get_links_f(self.session)
+        links = await self.scraper.from_site_f(self.session)
         links = [(title, url) for title, url in links if "draft:" not in url and "_" not in url]
         title, link = random.choice(links)
         text = await self.scraper.fetch_html(link, self.session)
@@ -139,7 +139,7 @@ class DscCog(commands.Cog):
         user_settings = Settings.get_user_setting(str(ctx.author.id))
         self.scraper.update_scraper_urls(user_settings)
 
-        links = await self.scraper.get_links(self.session)
+        links = await self.scraper.from_site(self.session)
         pattern = re.compile(rf"\b{re.escape(pagename.lower())}\b")
         titles = [(title, url) for title, url in links if pattern.search(title.lower())]
         if not titles: return await ctx.send(f"Страница '{pagename}' не найдена.")
@@ -160,7 +160,7 @@ class DscCog(commands.Cog):
         user_settings = Settings.get_user_setting(str(ctx.author.id))
         self.scraper.update_scraper_urls(user_settings)
     
-        articles = await self.scraper.get_links(self.session)
+        articles = await self.scraper.from_site(self.session)
         results = []
         for title, url in articles:
             if "draft:" in url or "admin" in url: continue

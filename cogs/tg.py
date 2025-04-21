@@ -80,7 +80,7 @@ class BotCommands:
     async def cmd_randompage(self, message: types.Message):
         wiki_scraper.update_scraper_urls(Settings.get_user_setting(message.from_user.id))
         async with aiohttp.ClientSession() as session:
-            links = await wiki_scraper.get_links_f(session)
+            links = await wiki_scraper.from_site_fS(session)
             links = [(title, url) for title, url in links if "draft:" not in url and "_" not in url]
             title, link = random.choice(links)
             html = await wiki_scraper.fetch_html(link, session)
@@ -120,7 +120,7 @@ class BotCommands:
         if len(parts) < 2: return await message.answer("Укажи название после команды.")
         name = parts[1].strip().lower()
         async with aiohttp.ClientSession() as session:
-            links = await wiki_scraper.get_links(session)
+            links = await wiki_scraper.from_site(session)
             match = next(((title, url) for title, url in links if re.fullmatch(re.escape(name), title.lower())), None)
             if not match: return await message.answer(f"Страница '{name}' не найдена.")
             title, url = match
@@ -141,7 +141,7 @@ class BotCommands:
         query = parts[1].strip().lower()
         wiki_scraper.update_scraper_urls(Settings.get_user_setting(message.from_user.id))
         async with aiohttp.ClientSession() as session:
-            links = await wiki_scraper.get_links(session)
+            links = await wiki_scraper.from_site(session)
             results = []
             for title, url in links:
                 if "draft:" in url or "admin:" in url:
