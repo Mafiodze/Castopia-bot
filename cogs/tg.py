@@ -88,6 +88,7 @@ class BotCommands:
         content = soup.find("div", id="page-content")
         if content:
             for e in content.select("div, br"): e.decompose()
+            if content.find("sup", class_="footnoteref"): content.find("sup", class_="footnoteref").decompose()
             desc = re.sub(r"\s+", " ", content.get_text(" ")).strip().split(".")[0]
         else: desc = "Содержимое не найдено."
         button = InlineKeyboardButton(text="Читать далее", url=link)
@@ -129,6 +130,7 @@ class BotCommands:
         content = soup.find("div", id="page-content")
         if content:
             for e in content.select("div, br"): e.decompose()
+            if content.find("sup", class_="footnoteref"): content.find("sup", class_="footnoteref").decompose()
             desc = re.sub(r"\s+", " ", content.get_text(" ")).strip().split(".")[0]
         else: desc = "Содержимое не найдено."
         btn = InlineKeyboardButton(text="Читать далее", url=url)
@@ -151,6 +153,7 @@ class BotCommands:
                 content = soup.find("div", id="page-content")
                 if content:
                     for e in content.select("div.no-style, br"): e.decompose()
+                    if content.find("sup", class_="footnoteref"): content.find("sup", class_="footnoteref").decompose()
                     text = content.get_text(" ", strip=True)
                 else: text = ""
                 if query in text.lower():

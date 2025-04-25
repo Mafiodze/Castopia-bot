@@ -103,6 +103,9 @@ class DscCog(commands.Cog):
         text = await self.scraper.fetch_html(link, self.session)
         soup = BeautifulSoup(text, "lxml")
         content = soup.find("div", id="page-content")
+        if content:
+            [e.decompose() for e in content.find_all("div", class_="no-style")]
+            if content.find("sup", class_="footnoteref"): content.find("sup", class_="footnoteref").decompose()
         description = content.get_text(" ", strip=True).split(".")[0].strip() + "." if content else "Содержимое не найдено."
         embed = discord.Embed(title=title, description=description, url=link, color=discord.Color.dark_red())
         embed.set_footer(text=FOOTER_TEXT)
@@ -147,7 +150,9 @@ class DscCog(commands.Cog):
         html = await self.scraper.fetch_html(url, self.session)
         soup = BeautifulSoup(html, "lxml")
         content = soup.find("div", id="page-content")
-        if content: [e.decompose() for e in content.find_all("div", class_="no-style")]
+        if content: 
+            [e.decompose() for e in content.find_all("div", class_="no-style")]
+            if content.find("sup", class_="footnoteref"): content.find("sup", class_="footnoteref").decompose()
         else: return await ctx.send("Нет доступа к содержимому.")
         text = content.get_text(" ", strip=True).split(".")[0].strip() + "." if content else "Содержимое не найдено."
         embed = discord.Embed(title=title, description=text, url=url, color=discord.Color.dark_red())
@@ -169,12 +174,13 @@ class DscCog(commands.Cog):
             content = soup.find("div", id="page-content")
             if content:
                 [e.decompose() for e in content.find_all("div", class_="no-style")]
+                if content.find("sup", class_="footnoteref"): content.find("sup", class_="footnoteref").decompose()
                 text = content.get_text(" ", strip=True)
             if query.lower() in text.lower():
                 snippet = TextProcessing.extract_sentence_discord(text, query)
                 soup_tags = BeautifulSoup(await self.scraper.fetch_html(url, self.session), "lxml")
                 tags_div = soup_tags.find("div", class_="page-tags")
-                page_tags = {a.get_text(strip=True).lower() for a in tags_div.find_all("a")} if tags_div else set()
+                page_tags = {link.get_text(strip=True).lower() for link in tags_div.find_all("a")} if tags_div else set()
                 if SYSTEM_TAGS & page_tags: continue
                 results.append((text.lower().count(query.lower()), title, url, snippet))
         if not results: return await ctx.send("По заданному отрывку ничего не найдено.")

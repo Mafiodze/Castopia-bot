@@ -76,9 +76,9 @@ class WikiScraper:
                 xml = await resp.text()
             soup = BeautifulSoup(xml, 'xml')
             new_map: dict[str, datetime] = {}
-            for u in soup.find_all('url'):
-                loc = u.find('loc')
-                lastmod = u.find('lastmod')
+            for url in soup.find_all('url'):
+                loc = url.find('loc')
+                lastmod = url.find('lastmod')
                 if not loc or not lastmod: continue
                 try: lm = datetime.fromisoformat(lastmod.text.rstrip('Z'))
                 except ValueError: continue
@@ -132,14 +132,14 @@ class WikiScraper:
 
     async def parse_links(self, html: str) -> List[Tuple[str, str]]:
         soup = BeautifulSoup(html, "lxml")
-        if (sb := soup.find("div", id="side-bar")): sb.decompose()
+        if (sidebar := soup.find("div", id="side-bar")): sidebar.decompose()
         links: List[Tuple[str, str]] = []
         box = soup.find("div", class_="list-pages-box")
         if not box: return links
-        for a in box.find_all("a"):
-            if a.get_text(strip=True).lower() == "edit": continue
-            href = a.get("href")
-            if href: links.append((a.get_text(strip=True), urljoin(self.base_url, href)))
+        for link in box.find_all("a"):
+            if link.get_text(strip=True).lower() == "edit": continue
+            href = link.get("href")
+            if href: links.append((link.get_text(strip=True), urljoin(self.base_url, href)))
         return links
 
     async def get_links(self, page_url: str, session: aiohttp.ClientSession) -> List[Tuple[str, str]]:
@@ -148,21 +148,21 @@ class WikiScraper:
     async def get_links_f(self, page_url: str, session: aiohttp.ClientSession) -> List[Tuple[str, str]]:
         html = await self.fetch_html(page_url, session)
         soup = BeautifulSoup(html, "lxml")
-        if (sb := soup.find("div", id="side-bar")): sb.decompose()
+        if (sidebar := soup.find("div", id="side-bar")): sidebar.decompose()
         links: List[Tuple[str, str]] = []
         box = soup.find("div", class_="list-pages-box")
         if box:
-            for a in box.find_all("a"):
-                title = a.get_text(strip=True)
+            for link in box.find_all("a"):
+                title = link.get_text(strip=True)
                 if title.lower() == "edit":
                     continue
-                href = a.get("href")
+                href = link.get("href")
                 if not href: continue
                 full_url = urljoin(self.base_url, href)
                 tags_html = await self.fetch_html(full_url, session)
                 tags_soup = BeautifulSoup(tags_html, "lxml")
                 tags_div = tags_soup.find("div", class_="page-tags")
-                article_tags = {t.get_text(strip=True).lower() for t in tags_div.find_all("a")} if tags_div else set()
+                article_tags = {title.get_text(strip=True).lower() for title in tags_div.find_all("a")} if tags_div else set()
                 if article_tags & self.system_tags: continue
                 links.append((title, full_url))
         return links
@@ -179,9 +179,9 @@ class WikiScraper:
                  for i in range(1, pages + 1)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         all_links: List[Tuple[str, str]] = []
-        for res in results:
-            if isinstance(res, list):
-                all_links.extend(res)
+        for result in results:
+            if isinstance(result, list):
+                all_links.extend(result)
         return all_links
 
 class PageParsingCog(commands.Cog):
