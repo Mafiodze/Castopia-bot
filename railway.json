@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "if [ \"$RAILWAY_SERVICE_NAME\" = \"discord-bot\" ]; then python dsc/bot.py; else python tg/bot.py; fi",
+    "startCommand": "sh -c \"if [ \\\"$RAILWAY_SERVICE_NAME\\\" = \\\"discord-bot\\\" ]; then python dsc/bot.py; else python tg/bot.py; fi\"",
     "restartPolicyType": "on_failure",
     "restartPolicyMaxRetries": 5
   }
