@@ -1,0 +1,1 @@
+# The legacy wkd adapter has no runnable code. Use ../requirements.txt for the active bots.
