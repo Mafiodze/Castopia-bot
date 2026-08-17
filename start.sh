@@ -3,6 +3,8 @@
 
 set -e
 
+cd "$(dirname "$0")"
+
 echo "🚀 Starting Castopia Bot (Discord + Telegram)..."
 
 # Check if .env exists
@@ -24,7 +26,7 @@ run_bot() {
 export $(grep -v '^#' .env | xargs)
 
 # Run both bots
-run_bot "Discord" "dsc/bot.py" &
+run_bot "Discord" "dsc/bot.py"
 DISCORD_PID=$!
 
 run_bot "Telegram" "tg/bot.py" &
