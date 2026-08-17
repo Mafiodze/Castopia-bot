@@ -12,7 +12,15 @@ from aiogram import F, Router, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from .page_parsing import Article, UpstreamAccessError, UpstreamUnavailableError, WikiClient, WikiError
+from .page_parsing import (
+    Article,
+    UpstreamAccessError,
+    UpstreamContentError,
+    UpstreamNotFoundError,
+    UpstreamUnavailableError,
+    WikiClient,
+    WikiError,
+)
 from .txt_processing import excerpt, highlight_html
 
 logger = logging.getLogger(__name__)
@@ -97,14 +105,28 @@ def _render_search_page(results: list[Article], query: str, page: int) -> str:
 
 
 async def _report_wiki_error(message: types.Message, error: Exception) -> None:
+    """Send appropriate error message to user based on error type."""
     if isinstance(error, UpstreamAccessError):
         await message.answer(
             "Источник запретил автоматический доступ. Для него нужен официальный API "
             "или разрешение владельца сайта."
         )
         return
+    if isinstance(error, UpstreamContentError):
+        await message.answer(
+            "Структура источника изменилась. Администратор уже получил диагностическую запись."
+        )
+        logger.error("wiki_content_error error=%s", error)
+        return
+    if isinstance(error, UpstreamNotFoundError):
+        await message.answer("Статья больше не существует в источнике.")
+        return
     if isinstance(error, UpstreamUnavailableError):
         await message.answer("Источник временно недоступен. Попробуйте немного позже.")
+        return
+    if isinstance(error, WikiError):
+        await message.answer("Не удалось получить данные из источника. Попробуйте позже.")
+        logger.warning("wiki_error error=%s", type(error).__name__)
         return
     logger.exception("Unexpected Telegram command error", exc_info=error)
     await message.answer("Не удалось обработать команду. Попробуйте ещё раз позже.")
@@ -128,17 +150,24 @@ def create_router(wiki: WikiClient) -> Router:
 
     @router.message(Command("randompage"))
     async def random_page(message: types.Message) -> None:
+        started_at = monotonic()
         try:
             article = await wiki.random_article()
             if article is None:
                 await message.answer("Не нашёл подходящую публичную статью.")
             else:
                 await message.answer(_article_message(article), reply_markup=_article_keyboard(article))
-        except WikiError as error:
+        except Exception as error:
             await _report_wiki_error(message, error)
+        finally:
+            logger.info(
+                "telegram_command command=randompage duration_ms=%s",
+                round((monotonic() - started_at) * 1000),
+            )
 
     @router.message(Command("search"))
     async def search_title(message: types.Message) -> None:
+        started_at = monotonic()
         query = _argument(message)
         if not query:
             await message.answer("Укажите название: <code>/search название статьи</code>")
@@ -149,11 +178,18 @@ def create_router(wiki: WikiClient) -> Router:
                 await message.answer(f"Статья «{html.escape(query)}» не найдена.")
             else:
                 await message.answer(_article_message(article, query), reply_markup=_article_keyboard(article))
-        except WikiError as error:
+        except Exception as error:
             await _report_wiki_error(message, error)
+        finally:
+            logger.info(
+                "telegram_command command=search query_length=%s duration_ms=%s",
+                len(query),
+                round((monotonic() - started_at) * 1000),
+            )
 
     @router.message(Command("tags"))
     async def search_tags(message: types.Message) -> None:
+        started_at = monotonic()
         tags = _argument(message).split()
         if not tags:
             await message.answer("Укажите хотя бы один тег: <code>/tags тег1 тег2</code>")
@@ -170,11 +206,19 @@ def create_router(wiki: WikiClient) -> Router:
                     f"{html.escape(article.title)}</a>"
                 )
             await message.answer("\n".join(lines)[:4096])
-        except WikiError as error:
+        except Exception as error:
             await _report_wiki_error(message, error)
+        finally:
+            logger.info(
+                "telegram_command command=tags tags_count=%s result_count=%s duration_ms=%s",
+                len(tags),
+                len(articles) if 'articles' in locals() else 0,
+                round((monotonic() - started_at) * 1000),
+            )
 
     @router.message(Command("fullsearch"))
     async def search_content(message: types.Message) -> None:
+        started_at = monotonic()
         query = _argument(message)
         if not query:
             await message.answer("Укажите текст: <code>/fullsearch поисковый запрос</code>")
@@ -192,8 +236,15 @@ def create_router(wiki: WikiClient) -> Router:
                 reply_markup=_search_keyboard(token, 1, total_pages),
                 disable_web_page_preview=True,
             )
-        except WikiError as error:
+        except Exception as error:
             await _report_wiki_error(message, error)
+        finally:
+            logger.info(
+                "telegram_command command=fullsearch query_length=%s result_count=%s duration_ms=%s",
+                len(query),
+                len(results) if 'results' in locals() else 0,
+                round((monotonic() - started_at) * 1000),
+            )
 
     @router.callback_query(F.data.startswith("s:"))
     async def paginate(callback: types.CallbackQuery) -> None:

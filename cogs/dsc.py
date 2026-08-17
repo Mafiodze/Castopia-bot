@@ -38,7 +38,10 @@ class _RateLimit:
 
 
 class _RateLimiter:
-    """One in-memory limiter shared by prefix and slash command invocations."""
+    """One in-memory limiter shared by prefix and slash command invocations.
+    
+    Tracks per-user, per-command rate limits. Returns retry_after duration.
+    """
 
     def __init__(self, limits: dict[str, _RateLimit]) -> None:
         self._limits = limits
@@ -46,16 +49,32 @@ class _RateLimiter:
         self._lock = asyncio.Lock()
 
     async def retry_after(self, user_id: int, command_name: str) -> float:
+        """Check if command is rate limited for user. Return seconds to wait, or 0 if OK.
+        
+        Cleans up old entries and registers new usage in thread-safe manner.
+        """
         limit = self._limits[command_name]
         now = monotonic()
         key = (user_id, command_name)
         async with self._lock:
             uses = self._uses[key]
+            # Remove old uses outside the period
             while uses and now - uses[0] >= limit.period_seconds:
                 uses.popleft()
+            # Check if limit exceeded
             if len(uses) >= limit.requests:
-                return max(0.0, limit.period_seconds - (now - uses[0]))
+                wait_time = max(0.0, limit.period_seconds - (now - uses[0]))
+                logger.debug(
+                    "discord_rate_limited user_id=%s command=%s wait_seconds=%.1f",
+                    user_id,
+                    command_name,
+                    wait_time,
+                )
+                return wait_time
+            # Register new usage
             uses.append(now)
+            logger.debug("discord_rate_allowed user_id=%s command=%s remaining=%s", 
+                        user_id, command_name, limit.requests - len(uses))
         return 0.0
 
 
@@ -178,16 +197,33 @@ class DscCog(commands.Cog):
     async def _send_error(self, ctx: commands.Context, error: Exception) -> None:
         if not isinstance(error, WikiError):
             logger.exception("discord_command_failed error=%s", type(error).__name__)
-        await ctx.send(self._error_text(error))
+        error_text = self._error_text(error)
+        # For deferred slash commands, use followup
+        if ctx.interaction is not None and ctx.interaction.response.is_done():
+            await ctx.interaction.followup.send(error_text, ephemeral=True)
+        else:
+            await ctx.send(error_text)
 
     async def _prepare_command(self, ctx: commands.Context, command_name: str) -> bool:
+        """Prepare command execution: defer slash interactions and check rate limits.
+        
+        For slash commands, defer immediately within Discord's 3-second window.
+        For rate limit, send response via appropriate channel (send or followup).
+        """
+        # Defer slash interactions immediately to prevent Discord timeout
+        if ctx.interaction is not None:
+            await ctx.interaction.response.defer(thinking=True)
+        
+        # Check rate limit after defer to ensure we can send response
         retry_after = await self.rate_limiter.retry_after(ctx.author.id, command_name)
         if retry_after:
-            await ctx.send(f"Подождите {retry_after:.0f} с перед следующим запросом.")
+            message = f"Подождите {retry_after:.0f} с перед следующим запросом."
+            if ctx.interaction is not None:
+                # Use followup for already-deferred interactions
+                await ctx.interaction.followup.send(message, ephemeral=True)
+            else:
+                await ctx.send(message)
             return False
-        if ctx.interaction is not None:
-            # A deferred interaction is acknowledged within Discord's three-second window.
-            await ctx.defer(thinking=True)
         return True
 
     async def _invoke(
@@ -196,10 +232,17 @@ class DscCog(commands.Cog):
         command_name: str,
         operation: Callable[[], Awaitable[object]],
     ) -> tuple[bool, object | None]:
+        """Invoke a wiki operation with timing and error handling.
+        
+        For prefix commands, show typing indicator.
+        For slash commands (already deferred), run directly.
+        """
         if not await self._prepare_command(ctx, command_name):
             return False, None
+        
         started_at = monotonic()
         try:
+            # Prefix commands need typing indicator; slash commands are already deferred
             if ctx.interaction is None:
                 async with ctx.typing():
                     result = await operation()
@@ -233,8 +276,6 @@ class DscCog(commands.Cog):
 
     @commands.hybrid_command(name="help", description="Показать команды Castopia")
     async def show_help(self, ctx: commands.Context) -> None:
-        if ctx.interaction is not None:
-            await ctx.defer(thinking=False)
         embed = discord.Embed(
             title="Castopia — команды",
             description=(
@@ -283,14 +324,31 @@ class DscCog(commands.Cog):
     async def search_title_autocomplete(
         self, _: discord.Interaction, current: str
     ) -> list[app_commands.Choice[str]]:
+        """Provide title suggestions for /search autocomplete.
+        
+        Limits to 25 suggestions, requires at least 2 characters, times out after 2.5s.
+        """
         if len(current.strip()) < 2:
             return []
         try:
             suggestions = await asyncio.wait_for(
                 self.wiki.title_suggestions(current), timeout=2.5
             )
-        except (WikiError, asyncio.TimeoutError):
+            logger.debug(
+                "discord_autocomplete query_length=%s suggestions_count=%s",
+                len(current),
+                len(suggestions),
+            )
+        except asyncio.TimeoutError:
+            logger.debug("discord_autocomplete timeout query_length=%s", len(current))
             return []
+        except WikiError as exc:
+            logger.debug("discord_autocomplete wiki_error=%s", type(exc).__name__)
+            return []
+        except Exception as exc:
+            logger.exception("discord_autocomplete unexpected_error=%s", type(exc).__name__)
+            return []
+        
         return [
             app_commands.Choice(name=title[:100], value=title[:100])
             for title in suggestions[:25]

@@ -142,3 +142,107 @@ class WikiClientTests(unittest.IsolatedAsyncioTestCase):
         )
         article = await client.get_article("Article", "/article")
         self.assertEqual(article.tags, frozenset({"статус:основное"}))
+
+    def test_list_parser_collects_from_all_boxes(self) -> None:
+        """Parser should collect links from ALL .list-pages-box elements, not just the first."""
+        client = make_client()
+        html = """
+        <div id="page-content">
+          <div class="list-pages-box"></div>
+          <div class="list-pages-box">
+            <a href="/article1">Article 1</a>
+          </div>
+          <div class="list-pages-box">
+            <a href="/article2">Article 2</a>
+            <a href="/article3">Article 3</a>
+          </div>
+        </div>
+        """
+        links = client._parse_list_links(html)
+        self.assertEqual(len(links), 3)
+        self.assertIn(("Article 1", "https://castopia.site/article1"), links)
+        self.assertIn(("Article 2", "https://castopia.site/article2"), links)
+        self.assertIn(("Article 3", "https://castopia.site/article3"), links)
+
+    def test_list_parser_handles_russian_edit_links(self) -> None:
+        """Parser should skip both 'edit' and 'редактировать' links."""
+        client = make_client()
+        html = """
+        <div id="page-content">
+          <div class="list-pages-box">
+            <a href="/article">Article</a>
+            <a href="/article/edit/true">edit</a>
+            <a href="/article/edit">Редактировать</a>
+            <a href="/paths/edit/other">edit in path</a>
+          </div>
+        </div>
+        """
+        links = client._parse_list_links(html)
+        self.assertEqual(len(links), 1)
+        self.assertEqual(links[0], ("Article", "https://castopia.site/article"))
+
+    async def test_all_links_validates_page_content_block(self) -> None:
+        """Should raise UpstreamContentError if #page-content block is missing."""
+        client = make_client()
+        client.fetch_html = AsyncMock(return_value='<html><body>No page content</body></html>')
+        with self.assertRaises(UpstreamContentError) as ctx:
+            await client.all_links()
+        self.assertIn("#page-content", str(ctx.exception))
+
+    async def test_all_links_validates_list_boxes_exist(self) -> None:
+        """Should raise UpstreamContentError if no .list-pages-box elements found."""
+        client = make_client()
+        client.fetch_html = AsyncMock(return_value='<div id="page-content"><p>Only text</p></div>')
+        with self.assertRaises(UpstreamContentError) as ctx:
+            await client.all_links()
+        self.assertIn(".list-pages-box", str(ctx.exception))
+
+    async def test_get_article_validates_content_block(self) -> None:
+        """Should raise UpstreamContentError if article has no #page-content."""
+        client = make_client()
+        client.fetch_html = AsyncMock(return_value='<html><body>Article deleted</body></html>')
+        with self.assertRaises(UpstreamContentError) as ctx:
+            await client.get_article("Title", "/article")
+        self.assertIn("#page-content", str(ctx.exception))
+
+    async def test_get_article_validates_non_empty_text(self) -> None:
+        """Should raise UpstreamContentError if article has no extractable text."""
+        client = make_client()
+        client.fetch_html = AsyncMock(
+            return_value='<div id="page-content"><script>js</script></div>'
+        )
+        with self.assertRaises(UpstreamContentError) as ctx:
+            await client.get_article("Title", "/article")
+        self.assertIn("доступного текста", str(ctx.exception))
+
+    async def test_search_content_uses_full_search_lock(self) -> None:
+        """Only one fulltext search should execute at a time."""
+        client = make_client()
+        all_links_calls = 0
+
+        async def counting_all_links() -> list[tuple[str, str]]:
+            nonlocal all_links_calls
+            all_links_calls += 1
+            return [("Article", "/article")]
+
+        client.all_links = counting_all_links  # type: ignore[assignment]
+        client.get_article = AsyncMock(
+            return_value=Article("Article", "https://castopia.site/article", "Query text", frozenset())
+        )
+
+        # Sequential searches should both use cache or run one at a time
+        await client.search_content("query1")
+        await client.search_content("query1")  # Same query, should use cache
+        self.assertEqual(all_links_calls, 1)
+
+    async def test_find_by_tags_handles_empty_candidates(self) -> None:
+        """Should return empty list if tag pages have no candidates."""
+        client = make_client()
+        client.fetch_html = AsyncMock(
+            return_value='<div id="tagged-pages-list"></div>'
+        )
+        client._resolve_tags = AsyncMock(
+            return_value=[type('ref', (), {'identifier': 'tag1', 'url': 'https://castopia.site/tag1'})()]
+        )
+        result = await client.find_by_tags(["tag1"])
+        self.assertEqual(result, [])
