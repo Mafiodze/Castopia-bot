@@ -1,51 +1,40 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+# Start both bots concurrently
 
-# Load local .env only when it exists, which is useful for local runs.
-if [ -f .env ]; then
-  set -a
-  . ./.env
-  set +a
+set -e
+
+echo "🚀 Starting Castopia Bot (Discord + Telegram)..."
+
+# Check if .env exists
+if [ ! -f .env ]; then
+    echo "❌ .env not found. Copy from .env.example:"
+    echo "  cp .env.example .env"
+    exit 1
 fi
 
-service_name="${RAILWAY_SERVICE_NAME:-}"
+# Function to run bot
+run_bot() {
+    local bot_type=$1
+    local script=$2
+    echo "Starting $bot_type bot..."
+    python "$script"
+}
 
-if [[ -n "$service_name" ]]; then
-  case "$service_name" in
-    discord|discord-bot)
-      echo "Starting Discord bot on Railway service: $service_name"
-      exec python dsc/bot.py
-      ;;
-    telegram|telegram-bot)
-      echo "Starting Telegram bot on Railway service: $service_name"
-      exec python tg/bot.py
-      ;;
-    *)
-      echo "Unknown Railway service name: $service_name; starting both bots as fallback"
-      ;;
-  esac
-fi
+# Export environment for both processes
+export $(grep -v '^#' .env | xargs)
 
-if [[ -n "${DISCORD_BOT_TOKEN:-}" && -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
-  echo "Starting both bots together (fallback mode)"
-  python dsc/bot.py &
-  discord_pid=$!
-  python tg/bot.py &
-  telegram_pid=$!
-  trap 'kill $discord_pid $telegram_pid 2>/dev/null || true' EXIT
-  wait "$discord_pid" "$telegram_pid"
-  exit $?
-fi
+# Run both bots
+run_bot "Discord" "dsc/bot.py" &
+DISCORD_PID=$!
 
-if [[ -n "${DISCORD_BOT_TOKEN:-}" ]]; then
-  echo "Starting Discord bot"
-  exec python dsc/bot.py
-fi
+run_bot "Telegram" "tg/bot.py" &
+TELEGRAM_PID=$!
 
-if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
-  echo "Starting Telegram bot"
-  exec python tg/bot.py
-fi
+# Cleanup on exit
+trap "kill $DISCORD_PID $TELEGRAM_PID 2>/dev/null; echo '✓ Bots stopped'" EXIT
 
-echo "No bot tokens found. Ensure DISCORD_BOT_TOKEN and/or TELEGRAM_BOT_TOKEN are set in the environment."
-exit 1
+echo "✓ Both bots running (PIDs: $DISCORD_PID, $TELEGRAM_PID)"
+echo "Press Ctrl+C to stop"
+
+# Wait for all background processes
+wait
