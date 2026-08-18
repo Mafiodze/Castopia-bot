@@ -1,74 +1,95 @@
 #!/bin/bash
 
-set -e
+set -u
 
-# Переходим в директорию, где находится start.sh
-cd "$(dirname "$0")"
+cd /app
 
 echo "========================================"
 echo "🚀 Starting Castopia Bot"
 echo "========================================"
 
-# Проверяем .env
-if [ ! -f ".env" ]; then
-    echo "❌ .env not found!"
-    echo "Create it from .env.example:"
-    echo "cp .env.example .env"
-    exit 1
+# --------------------------------------------------
+# Загружаем .env, если он существует
+# --------------------------------------------------
+
+if [ -f "/app/.env" ]; then
+    echo "✓ Loading .env"
+
+    set -a
+    # shellcheck disable=SC1091
+    source /app/.env
+    set +a
+else
+    echo "✓ Using environment variables from container"
 fi
 
-# Загружаем переменные из .env
-set -a
-source .env
-set +a
-
-echo "✓ .env loaded"
 echo ""
 
-# ----------------------------------------
-# Запуск Discord
-# ----------------------------------------
+# --------------------------------------------------
+# Проверяем Python
+# --------------------------------------------------
 
+echo "Python: $(python --version)"
+echo "Working directory: $(pwd)"
+echo ""
+
+# --------------------------------------------------
+# Запуск Discord
+# --------------------------------------------------
+
+echo "========================================"
 echo "🤖 Starting Discord bot..."
-python dsc/bot.py &
+echo "========================================"
+
+python -u /app/dsc/bot.py &
 DISCORD_PID=$!
 
-echo "✓ Discord bot started (PID: $DISCORD_PID)"
+echo "✓ Discord process started: PID $DISCORD_PID"
 echo ""
 
-# ----------------------------------------
+# --------------------------------------------------
 # Запуск Telegram
-# ----------------------------------------
+# --------------------------------------------------
 
+echo "========================================"
 echo "📱 Starting Telegram bot..."
-python tg/bot.py &
+echo "========================================"
+
+python -u /app/tg/bot.py &
 TELEGRAM_PID=$!
 
-echo "✓ Telegram bot started (PID: $TELEGRAM_PID)"
+echo "✓ Telegram process started: PID $TELEGRAM_PID"
 echo ""
 
+# --------------------------------------------------
+# Показать состояние
+# --------------------------------------------------
+
 echo "========================================"
-echo "✓ Both bots are running"
+echo "✓ Castopia bots started"
 echo "========================================"
-echo "Discord PID:  $DISCORD_PID"
+echo "Discord PID : $DISCORD_PID"
 echo "Telegram PID: $TELEGRAM_PID"
-echo ""
-echo "All bot output will appear below."
 echo "========================================"
 echo ""
 
-# ----------------------------------------
-# Остановка обоих ботов
-# ----------------------------------------
+# --------------------------------------------------
+# Корректное завершение контейнера
+# --------------------------------------------------
 
 cleanup() {
     echo ""
     echo "========================================"
-    echo "🛑 Stopping bots..."
+    echo "🛑 Stopping Castopia bots..."
     echo "========================================"
 
-    kill "$DISCORD_PID" 2>/dev/null || true
-    kill "$TELEGRAM_PID" 2>/dev/null || true
+    if kill -0 "$DISCORD_PID" 2>/dev/null; then
+        kill "$DISCORD_PID" 2>/dev/null || true
+    fi
+
+    if kill -0 "$TELEGRAM_PID" 2>/dev/null; then
+        kill "$TELEGRAM_PID" 2>/dev/null || true
+    fi
 
     wait "$DISCORD_PID" 2>/dev/null || true
     wait "$TELEGRAM_PID" 2>/dev/null || true
@@ -76,22 +97,24 @@ cleanup() {
     echo "✓ Bots stopped"
 }
 
-trap cleanup EXIT INT TERM
+trap cleanup SIGINT SIGTERM EXIT
 
-# ----------------------------------------
-# Ждём завершения процессов
-# ----------------------------------------
+# --------------------------------------------------
+# Следим за обоими процессами
+# --------------------------------------------------
 
-wait "$DISCORD_PID" &
-WAIT_DISCORD=$!
+while true; do
+    if ! kill -0 "$DISCORD_PID" 2>/dev/null; then
+        echo "❌ Discord bot stopped."
+        echo "🛑 Stopping container..."
+        exit 1
+    fi
 
-wait "$TELEGRAM_PID" &
-WAIT_TELEGRAM=$!
+    if ! kill -0 "$TELEGRAM_PID" 2>/dev/null; then
+        echo "❌ Telegram bot stopped."
+        echo "🛑 Stopping container..."
+        exit 1
+    fi
 
-# Если один из ботов завершился,
-# ждём некоторое время, чтобы получить его код выхода
-wait "$WAIT_DISCORD" 2>/dev/null || true
-wait "$WAIT_TELEGRAM" 2>/dev/null || true
-
-echo ""
-echo "⚠️ One or both bots have stopped."
+    sleep 5
+done
