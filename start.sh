@@ -1,5 +1,4 @@
 #!/bin/bash
-# Start both bots concurrently
 
 set -e
 
@@ -7,36 +6,26 @@ cd "$(dirname "$0")"
 
 echo "🚀 Starting Castopia Bot (Discord + Telegram)..."
 
-# Check if .env exists
 if [ ! -f .env ]; then
-    echo "❌ .env not found. Copy from .env.example:"
-    echo "  cp .env.example .env"
+    echo "❌ .env not found"
     exit 1
 fi
 
-# Function to run bot
-run_bot() {
-    local bot_type=$1
-    local script=$2
-    echo "Starting $bot_type bot..."
-    python "$script"
-}
+set -a
+source .env
+set +a
 
-# Export environment for both processes
-export $(grep -v '^#' .env | xargs)
-
-# Run both bots
-run_bot "Discord" "dsc/bot.py"
+echo "Starting Discord bot..."
+python dsc/bot.py > discord.log 2>&1 &
 DISCORD_PID=$!
 
-run_bot "Telegram" "tg/bot.py" &
+echo "Starting Telegram bot..."
+python tg/bot.py > telegram.log 2>&1 &
 TELEGRAM_PID=$!
 
-# Cleanup on exit
-trap "kill $DISCORD_PID $TELEGRAM_PID 2>/dev/null; echo '✓ Bots stopped'" EXIT
+echo "✓ Discord PID: $DISCORD_PID"
+echo "✓ Telegram PID: $TELEGRAM_PID"
 
-echo "✓ Both bots running (PIDs: $DISCORD_PID, $TELEGRAM_PID)"
-echo "Press Ctrl+C to stop"
+trap 'kill $DISCORD_PID $TELEGRAM_PID 2>/dev/null || true' EXIT
 
-# Wait for all background processes
 wait
