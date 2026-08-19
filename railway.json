@@ -1,11 +1,27 @@
 {
-  "$schema": "https://railway.app/railway.schema.json",
+  "$schema": "https://railway.com/railway.schema.json",
+
   "build": {
-    "builder": "NIXPACKS"
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "/Dockerfile",
+    "buildEnvironment": "V3"
   },
+
   "deploy": {
-    "startCommand": "sh -c \"if [ \\\"$RAILWAY_SERVICE_NAME\\\" = \\\"discord-bot\\\" ]; then python dsc/bot.py; else python tg/bot.py; fi\"",
-    "restartPolicyType": "on_failure",
-    "restartPolicyMaxRetries": 5
+    "runtime": "V2",
+    "numReplicas": 1,
+
+    "startCommand": "./start.sh",
+
+    "sleepApplication": false,
+
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 5,
+
+    "multiRegionConfig": {
+      "ams": {
+        "numReplicas": 1
+      }
+    }
   }
 }

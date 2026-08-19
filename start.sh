@@ -1,4 +1,3 @@
-
 #!/bin/bash
 
 set -u
@@ -12,46 +11,50 @@ echo "Python: $(python --version)"
 echo "Working directory: $(pwd)"
 echo ""
 
-# --------------------------------------------------
-# Discord bot
-# --------------------------------------------------
-
-echo "🤖 Starting Discord bot..."
-
-python -u /app/dsc/bot.py &
-DISCORD_PID=$!
-
-echo "✓ Discord bot started (PID: $DISCORD_PID)"
-echo ""
+DISCORD_PID=""
+TELEGRAM_PID=""
 
 # --------------------------------------------------
-# Telegram bot
+# Start Discord
 # --------------------------------------------------
 
-echo "📱 Starting Telegram bot..."
+start_discord() {
+    echo "🤖 Starting Discord bot..."
 
-python -u /app/tg/bot.py &
-TELEGRAM_PID=$!
+    python -u /app/dsc/bot.py &
+    DISCORD_PID=$!
 
-echo "✓ Telegram bot started (PID: $TELEGRAM_PID)"
-echo ""
-
-echo "========================================"
-echo "✓ Discord + Telegram are running"
-echo "========================================"
-echo ""
+    echo "✓ Discord started (PID: $DISCORD_PID)"
+}
 
 # --------------------------------------------------
-# Корректно завершаем дочерние процессы,
-# когда Railway останавливает контейнер.
+# Start Telegram
 # --------------------------------------------------
 
-cleanup() {
+start_telegram() {
+    echo "📱 Starting Telegram bot..."
+
+    python -u /app/tg/bot.py &
+    TELEGRAM_PID=$!
+
+    echo "✓ Telegram started (PID: $TELEGRAM_PID)"
+}
+
+# --------------------------------------------------
+# Stop bots
+# --------------------------------------------------
+
+stop_bots() {
     echo ""
     echo "🛑 Stopping Castopia bots..."
 
-    kill "$DISCORD_PID" 2>/dev/null || true
-    kill "$TELEGRAM_PID" 2>/dev/null || true
+    if [ -n "$DISCORD_PID" ]; then
+        kill "$DISCORD_PID" 2>/dev/null || true
+    fi
+
+    if [ -n "$TELEGRAM_PID" ]; then
+        kill "$TELEGRAM_PID" 2>/dev/null || true
+    fi
 
     wait "$DISCORD_PID" 2>/dev/null || true
     wait "$TELEGRAM_PID" 2>/dev/null || true
@@ -59,21 +62,42 @@ cleanup() {
     echo "✓ Bots stopped"
 }
 
-trap cleanup SIGTERM SIGINT EXIT
+trap stop_bots SIGTERM SIGINT EXIT
 
 # --------------------------------------------------
-# Ждём оба процесса.
-# Telegram и Discord полностью независимы.
+# Start both bots
 # --------------------------------------------------
 
-wait "$DISCORD_PID" &
-WAIT_DISCORD=$!
-
-wait "$TELEGRAM_PID" &
-WAIT_TELEGRAM=$!
-
-wait "$WAIT_DISCORD" || true
-wait "$WAIT_TELEGRAM" || true
+start_discord
+start_telegram
 
 echo ""
-echo "⚠️ One or both bots have stopped."
+echo "========================================"
+echo "✓ BOTH BOTS ARE RUNNING"
+echo "========================================"
+echo "Discord PID : $DISCORD_PID"
+echo "Telegram PID: $TELEGRAM_PID"
+echo "========================================"
+echo ""
+
+# --------------------------------------------------
+# Monitor both processes
+# --------------------------------------------------
+
+while true; do
+    sleep 5
+
+    # Discord stopped
+    if ! kill -0 "$DISCORD_PID" 2>/dev/null; then
+        echo "⚠️ Discord bot stopped. Restarting..."
+        wait "$DISCORD_PID" 2>/dev/null || true
+        start_discord
+    fi
+
+    # Telegram stopped
+    if ! kill -0 "$TELEGRAM_PID" 2>/dev/null; then
+        echo "⚠️ Telegram bot stopped. Restarting..."
+        wait "$TELEGRAM_PID" 2>/dev/null || true
+        start_telegram
+    fi
+done

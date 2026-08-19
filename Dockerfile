@@ -8,17 +8,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxslt1-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt /app/requirements.txt
+COPY requirements.txt .
 
-RUN pip install --no-cache-dir -r /app/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . /app
+COPY . .
 
-RUN useradd -m -u 1000 castopia \
-    && chown -R castopia:castopia /app \
-    && chmod +x /app/start.sh
-
-USER castopia
+RUN chmod +x /app/start.sh
 
 CMD ["/app/start.sh"]
-
