@@ -1,435 +1,431 @@
-# Castopia Bot - Discord & Telegram Wiki Client
+# Castopia Bot
 
-**Быстрый поиск по публичной wiki** с поддержкой пагинации и полнотекстового поиска в Discord и Telegram.
+Discord and Telegram client for searching the public Castopia Wiki.
 
-**Status**: ✅ Production ready | 20/20 tests passing | Railway.app compatible
+The project intentionally keeps a simple architecture:
 
-## Quick Links
+```text
+Discord
+dsc/bot.py
+    ↓
+cogs/dsc.py
+    ↓
+cogs/page_parsing.py
+    ↓
+Castopia Wiki
 
-- 🚀 [Deploy on Railway.app (5 min)](RAILWAY.md) - Free cloud hosting
-- 📖 [Full Deployment Guide](DEPLOYMENT.md) - Docker, local, cloud
-- ✅ [Implementation Summary](IMPLEMENTATION_SUMMARY.md) - All features & fixes
-- 📋 [Smoke Test Checklist](SMOKE_TEST.md) - Manual testing guide
-
----
-
-## Features
-
-### Discord Bot 🎮
-- ✅ **Hybrid Commands**: Works as both prefix (`.search`) and slash (`/search`)
-- ✅ **5 Complete Commands**: search, randompage, tags, fullsearch, help  
-- ✅ **Autocomplete**: Intelligent search suggestions
-- ✅ **Pagination**: Beautiful result navigation (5 per page, owner-only)
-- ✅ **Rate Limiting**: Anti-spam protection (3 searches/20sec, 1 fullsearch/30sec)
-- ✅ **Discord Compliant**: Slash commands respect 3-second timeout rule
-
-### Telegram Bot 📱
-- ✅ **5 Full Commands**: /start, /search, /randompage, /tags, /fullsearch
-- ✅ **Inline Buttons**: Stateless pagination with callback queries
-- ✅ **Markdown Support**: Beautiful HTML formatting
-- ✅ **Long Polling**: No webhook needed, just runs
-- ✅ **Russian Interface**: Completely localized
-
-### Wiki Client 📚
-- ✅ **4-Level Caching**: Pages, articles, links, search results (TTL-based)
-- ✅ **Concurrency Control**: Bounded worker pool (configurable 1-10)
-- ✅ **Structured Errors**: 5 diagnostic error types with recovery
-- ✅ **Full-Text Search**: Relevance-ranked with frequency analysis
-- ✅ **Structure Validation**: HTML format checks before parsing
-
----
-
-## Quick Start (2 minutes)
-
-### Local Development
-
-```bash
-# 1. Setup
-git clone <repo>
-cd castopia-bot
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# 2. Install
-pip install -r requirements.txt
-
-# 3. Configure
+Telegram
+tg/bot.py
+    ↓
+cogs/tg.py
+    ↓
+cogs/page_parsing.py
+    ↓
+Castopia Wiki
+Discord and Telegram use separate entry points and adapters, while sharing the same WikiClient and configuration layer.
+Features
+Discord
+Hybrid commands are supported, so the same functionality is available through both prefix and slash commands:
+.help
+.search <title>
+.randompage
+.tags <tag> [tag...]
+.fullsearch <text>
+Slash commands:
+/help
+/search
+/randompage
+/tags
+/fullsearch
+Additional Discord functionality includes:
+	•	autocomplete for /search;
+	•	pagination for full-text search results;
+	•	per-user and per-command rate limiting;
+	•	interaction handling for slash and hybrid commands.
+Telegram
+/start
+/help
+/search <title>
+/randompage
+/tags <tag> [tag...]
+/fullsearch <text>
+Telegram supports:
+	•	inline keyboards;
+	•	callback queries;
+	•	pagination for full-text search;
+	•	HTML message formatting;
+	•	long polling.
+WikiClient
+Shared Wiki logic is located in:
+cogs/page_parsing.py
+WikiClient is responsible for:
+	•	asynchronous HTTP requests;
+	•	bounded concurrency;
+	•	timeout handling;
+	•	retry handling;
+	•	Wiki origin validation;
+	•	HTML parsing;
+	•	title search;
+	•	tag search;
+	•	full-text search;
+	•	pagination;
+	•	runtime caching;
+	•	structured upstream error handling.
+Discord and Telegram do not maintain separate Wiki implementations. Both adapters use the same WikiClient.
+Runtime cache is application state. It is not part of the repository and does not depend on cache.pkl.
+Requirements
+The project uses Python 3.12 as its runtime target.
+For local development you need:
+	•	Python 3.12;
+	•	pip;
+	•	Internet access;
+	•	a Discord Bot Token if Discord is enabled;
+	•	a Telegram Bot Token if Telegram is enabled.
+Python dependencies are installed from the root:
+requirements.txt
+Separate dependency files are not required for the current application architecture.
+Quick Start
+Clone the repository:
+git clone https://github.com/Mafiodze/Castopia-bot.git
+cd Castopia-bot
+Create a virtual environment.
+Linux/macOS
+python3.12 -m venv .venv
+source .venv/bin/activate
+Windows
+py -3.12 -m venv .venv
+.venv\Scripts\activate
+Install dependencies:
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+Create the environment file:
 cp .env.example .env
-# Edit .env with your tokens
-
-# 4. Run
-python dsc/bot.py &  # Discord
-python tg/bot.py     # Telegram (different terminal)
-```
-
-### Cloud Deployment
-
-```bash
-# 1. Push to GitHub
-git add . && git commit -m "Deploy to Railway"
-git push
-
-# 2. Connect Railway (see RAILWAY.md)
-# 3. Set environment variables
-# 4. Done! Both bots auto-deploy
-```
-
-**Estimated time**: 5 minutes  
-**Cost**: $0-5/month on Railway free tier
-
----
-
-## Testing & Validation
-
-```bash
-# Unit tests (20/20 passing ✅)
-python -m unittest discover tests/ -v
-
-# Validate setup
-python health_check.py
-
-# Manual testing
-python dsc/bot.py  # Try: /help, /search SCP-096
-python tg/bot.py   # Try: /help, /search SCP-096
-```
-
----
-
-## Project Structure
-
-```
-castopia-bot/
-├── dsc/bot.py              # Discord bot entrypoint (400 lines)
-├── tg/bot.py               # Telegram bot entrypoint (300 lines)
+On Windows, create or copy .env manually if cp is not available.
+Fill .env with the required tokens and configuration values.
+Start Discord
+python dsc/bot.py
+Start Telegram
+Run in a separate terminal:
+python tg/bot.py
+Start both processes
+Linux/macOS:
+./start.sh
+Windows:
+start.bat
+For development, running Discord and Telegram in separate terminals is usually easier because their logs remain independent.
+Environment Variables
+Discord
+DISCORD_BOT_TOKEN=...
+Optional:
+DISCORD_GUILD_ID=...
+DISCORD_GUILD_ID can be used to synchronize application commands to a specific development guild.
+Telegram
+TELEGRAM_BOT_TOKEN=...
+Wiki
+WIKI_BASE_URL=https://castopia.site
+WIKI_USER_AGENT=CastopiaBot/2.0
+WIKI_MAX_CONCURRENCY=4
+WIKI_MAX_CONCURRENCY must remain within the supported range of 1..10.
+WIKI_BASE_URL must be a valid HTTPS URL accepted by the project’s configuration validation.
+Logging
+LOG_LEVEL=INFO
+Do not commit .env or real bot tokens.
+Project Structure
+Castopia-bot/
 ├── cogs/
-│   ├── page_parsing.py     # Shared WikiClient (1000+ lines, fully tested)
-│   ├── dsc.py              # Discord commands (400 lines)
-│   ├── tg.py               # Telegram commands (300 lines)
-│   ├── constants.py        # Config loader
-│   └── txt_processing.py   # Text utilities
+│   ├── constants.py
+│   ├── dsc.py
+│   ├── page_parsing.py
+│   ├── tg.py
+│   └── txt_processing.py
+├── dsc/
+│   └── bot.py
+├── tg/
+│   └── bot.py
 ├── tests/
-│   ├── test_wiki_client.py (11 tests - all passing ✅)
-│   └── test_discord_ui.py  (6 tests - all passing ✅)
-├── .env.example            # Configuration template
-├── Procfile                # Railway process definitions
-├── runtime.txt             # Python 3.12 specification
-├── requirements.txt        # Dependencies (discord, aiogram, aiohttp, etc)
-├── RAILWAY.md              # 🚀 Cloud deployment (START HERE)
-├── DEPLOYMENT.md           # Full deployment guide
-└── README.md               # This file
-```
-
----
-
-## Commands
-
-### Discord
-
-**Prefix style** (requires message content intent):
-```
-.search <name>         - Search by article name
-.randompage           - Random public article
-.tags <tag> [tags]    - Find articles by tags
-.fullsearch <text>    - Full-text search
-.help                 - This help message
-```
-
-**Slash style** (modern):
-```
-/search <name>        - With autocomplete!
+│   ├── test_discord_ui.py
+│   └── test_wiki_client.py
+├── .dockerignore
+├── .env.example
+├── .gitignore
+├── Dockerfile
+├── docker-compose.yml
+├── DEPLOYMENT.md
+├── LICENSE.txt
+├── RAILWAY.md
+├── README.md
+├── SMOKE_TEST.md
+├── railway.json
+├── requirements.txt
+├── runtime.txt
+├── start.bat
+└── start.sh
+Historical deployment snapshots, local cache files, .pyc, __pycache__, and other generated runtime artifacts are not part of the intended working architecture.
+Commands
+Discord
+Prefix commands:
+.help
+.search <title>
+.randompage
+.tags <tag> [tag...]
+.fullsearch <text>
+Slash commands:
+/help
+/search <title>
 /randompage
 /tags <tag>
 /fullsearch <text>
+Telegram
+/start
 /help
-```
-
-### Telegram
-
-```
-/start or /help       - Commands & guide
-/search <name>        - Search by name
-/randompage          - Random article
-/tags <tag>          - Find by tags
-/fullsearch <text>   - Full-text search
-```
-
----
-
-## Configuration
-
-### Environment Variables
-
-**Required:**
-- `DISCORD_BOT_TOKEN` - Create at [Discord Developer Portal](https://discord.com/developers)
-- `TELEGRAM_BOT_TOKEN` - Get from [@BotFather](https://t.me/BotFather)
-
-**Optional:**
-```
-WIKI_BASE_URL=https://castopia.site           # Wiki URL (default shown)
-WIKI_USER_AGENT=CastopiaBot/2.0               # Identify to wiki
-WIKI_MAX_CONCURRENCY=4                        # Concurrent requests (1-10)
-DISCORD_GUILD_ID=                             # For testing (guild-only commands)
-LOG_LEVEL=INFO                                # DEBUG, INFO, WARNING, ERROR
-```
-
-### Setup .env
-
-```bash
-cp .env.example .env
-# Edit with your tokens - NEVER commit this file!
-```
-
-**Important**: Use Railway's environment UI for cloud, not `.env` file.
-
----
-
-## Architecture
-
-### Core Components
-
-#### WikiClient (1000+ lines)
-- HTML parsing with BeautifulSoup + lxml
-- Async HTTP with aiohttp (bounded concurrency)
-- Multi-level cache with TTL
-- Full-text search with relevance ranking
-- Comprehensive error handling
-
-#### Discord Bot (400+ lines)
-- Hybrid commands (prefix + slash)
-- asyncio-based rate limiting (per-user, per-command)
-- Discord.py 2.4+ UI components
-- View-based pagination (owner-only)
-- Deferred interactions (Discord 3-sec compliant)
-
-#### Telegram Bot (300+ lines)
-- aiogram 3.x Router pattern
-- Long polling dispatcher
-- Callback query pagination
-- Inline keyboard formatting
-- Russian localization
-
----
-
-## Testing & Quality
-
-### Unit Tests (20/20 ✅)
-
-```bash
-python -m unittest discover tests/ -v
-
-# Coverage includes:
-# ✓ HTML parser edge cases (multiple boxes, edit links, Russian)
-# ✓ Validation (page content, list boxes, non-empty text)
-# ✓ Rate limiting (per-user, per-command, reset)
-# ✓ Pagination (Discord UI, owner-only access)
-# ✓ Error handling (404, 429, 5xx, content errors)
-# ✓ Caching (TTL, hit/miss tracking)
-# ✓ Concurrency (worker pool, batch processing)
-# ✓ Search lock (full-text search serialization)
-```
-
-### Test Results
-
-```
-Ran 20 tests in 0.439s
-OK ✅ - All tests passing
-```
-
----
-
-## Performance
-
-- **Response time**: 100-500ms typical
-- **Memory usage**: ~50MB per bot
-- **Concurrent requests**: 4 (configurable 1-10)
-- **Throughput**: ~100 searches/minute sustained
-- **Availability**: 99.9% on Railway.app
-
-**Railway Free Tier**: 
-- $5/month credits ✓
-- Sufficient for 50-200 active users
-- Estimated monthly cost: $3-4
-
----
-
-## Deployment Options
-
-### 🚀 Option 1: Railway.app (Recommended)
-
-**Best for**: Beginners, automatic scaling, minimal ops
-
-```bash
-# 1. Push to GitHub
-# 2. Railway auto-detects & deploys
-# 3. Set environment variables
-# 4. Done!
-```
-
-See **[RAILWAY.md](RAILWAY.md)** for detailed guide.
-
-**Pros**: Free tier, auto-deploy, monitoring included  
-**Cons**: Limited free credits  
-**Estimated setup time**: 5 minutes
-
-### Option 2: Docker Locally
-
-```bash
-# Build
+/search <title>
+/randompage
+/tags <tag> [tag...]
+/fullsearch <text>
+Testing
+Run the test suite with:
+python -m unittest discover -s tests -v
+Run a compilation check with:
+python -m compileall cogs dsc tg tests
+The README intentionally does not claim a fixed number of passing tests. The current result must always be determined by running the test suite against the current codebase.
+A successful compilation check does not prove that the bots work correctly at runtime.
+Docker
+The deployment architecture uses Python 3.12 and a slim Python base image.
+Build the image:
 docker build -t castopia-bot .
-
-# Run both bots
-docker-compose up --profile all
-
-# Run Discord only
-docker-compose up --profile discord
-```
-
-**Pros**: Full control, reproducible  
-**Cons**: Need Docker installed  
-**Estimated setup time**: 10 minutes
-
-### Option 3: VPS (Advanced)
-
-```bash
-# Manual setup on any Linux/Windows server
-# Use systemd service files for auto-restart
-# Full control but requires maintenance
-```
-
-**Pros**: Unlimited, cheapest long-term  
-**Cons**: Manual configuration, maintenance required  
-**Estimated setup time**: 30 minutes
-
----
-
-## Troubleshooting
-
-### Bot Not Starting
-
-1. **Check Python version**:
-   ```bash
-   python --version  # Should be 3.10+
-   ```
-
-2. **Check dependencies**:
-   ```bash
-   python -c "import discord, aiogram, aiohttp; print('OK')"
-   ```
-
-3. **Validate .env**:
-   ```bash
-   python debug_env.py
-   ```
-
-4. **Check token format**:
-   - Discord: Long alphanumeric string
-   - Telegram: Numeric ID colon token
-
-### Bot Timeout or Crashes
-
-**Discord:**
-- Check Gateway connection in logs
-- Verify command defer logic (should happen within 3 sec)
-
-**Telegram:**
-- Check polling start message
-- Verify bot token is valid
-
-### "Structure Changed" Error
-
-The wiki's HTML changed. This is recoverable:
-1. Bot will retry with timeout
-2. Create GitHub issue if persists
-3. New version will adapt automatically
-
----
-
-## Logging
-
-Structured logging for easy debugging:
-
-```json
-{
-  "timestamp": "2024-01-14 12:34:56,789",
-  "level": "INFO",
-  "component": "wiki_request",
-  "event": "Fetching page",
-  "url": "https://castopia.site/...",
-  "duration_ms": 245
-}
-```
-
-**View logs:**
-- **Local**: Terminal stdout/stderr
-- **Railway**: Dashboard → Logs tab
-- **Filter**: `grep "error\|warn"` to find issues
-
----
-
-## Contributing
-
-We welcome contributions! Guidelines:
-
-1. **Test**: `python -m unittest discover tests/`
-2. **Lint**: Check for syntax errors
-3. **Document**: Update docstrings
-4. **Language**: Russian UI for users
-
-```bash
-# Development workflow
-git checkout -b feature/amazing-feature
-# Make changes
-python -m unittest discover tests/  # All tests must pass
-git commit -am "Add amazing feature"
-git push origin feature/amazing-feature
-# Create PR
-```
-
----
-
-## License
-
-CC BY-SA 3.0 - Wiki content follows this license
-
----
-
-## Support & Resources
-
-- 📚 **Full Docs**: [DEPLOYMENT.md](DEPLOYMENT.md), [RAILWAY.md](RAILWAY.md)
-- ✅ **Quality Metrics**: [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)
-- 📋 **Testing**: [SMOKE_TEST.md](SMOKE_TEST.md), `tests/` directory
-- 🔧 **Troubleshooting**: See Troubleshooting section above
-- 💬 **Questions**: Create GitHub Issue or Discussion
-
----
-
-## Version History
-
-**v2.1** (Current - Cloud Ready)
-- ✅ Railway.app deployment support
-- ✅ Docker containerization
-- ✅ Enhanced error handling
-- ✅ 20 comprehensive unit tests
-- ✅ Full documentation
-
-**v2.0** (Telegram + Stabilization)
-- Telegram bot with all features
-- Error handling for all WikiError types
-- Structured logging
-
-**v1.0** (Initial Release)
-- Discord bot with hybrid commands
-- Wiki client with caching
-- Full-text search
-
----
-
-## Next Steps
-
-1. **Try locally**: `python dsc/bot.py` + `/help`
-2. **Read** [RAILWAY.md](RAILWAY.md) to deploy
-3. **Monitor** logs for 24 hours
-4. **Enjoy**! 🎉
-
-**Questions?** Create an issue or check documentation above.
-
+Run it:
+docker run --env-file .env castopia-bot
+The Docker image starts:
+/app/start.sh
+start.sh launches:
+/app/dsc/bot.py
+/app/tg/bot.py
+and monitors the two processes.
+Before using Docker, make sure secrets are not included in the Docker build context or image.
+Docker Compose
+The project provides:
+docker-compose.yml
+Start the local Compose deployment with:
+docker compose up
+The Compose configuration should remain consistent with:
+Dockerfile
+start.sh
+requirements.txt
+Do not assume that a Compose configuration works merely because the YAML file is valid. The container should still be tested at runtime.
+Railway
+Railway uses Docker deployment.
+The deployment path is:
+Railway
+   ↓
+railway.json
+   ↓
+Dockerfile
+   ↓
+./start.sh
+   ├── dsc/bot.py
+   └── tg/bot.py
+        ↓
+   shared WikiClient
+The Railway deployment uses:
+builder: DOCKERFILE
+dockerfilePath: /Dockerfile
+startCommand: ./start.sh
+Procfile is not the current Railway startup mechanism.
+For detailed deployment instructions, see:
+	•	RAILWAY.md⁠
+	•	DEPLOYMENT.md⁠
+	•	SMOKE_TEST.md⁠
+Deployment
+The main deployment files are:
+Dockerfile
+docker-compose.yml
+railway.json
+start.sh
+requirements.txt
+runtime.txt
+The deployment documentation is:
+	•	Deployment Guide⁠
+	•	Railway Deployment Guide⁠
+	•	Smoke Test⁠
+Smoke Test
+After code changes or deployment, use:
+SMOKE_TEST.md
+At minimum, verify:
+	•	Discord startup;
+	•	Telegram startup;
+	•	.search / /search;
+	•	.randompage / /randompage;
+	•	.tags / /tags;
+	•	.fullsearch / /fullsearch;
+	•	Discord autocomplete;
+	•	Discord pagination;
+	•	Telegram pagination;
+	•	rate limiting;
+	•	Wiki error handling;
+	•	configuration validation;
+	•	caching;
+	•	concurrency.
+Do not consider a deployment successful merely because a process starts or a hosting dashboard reports Running.
+The application should be verified through its actual user-facing commands.
+Configuration
+The main configuration layer is shared between Discord and Telegram.
+The intended flow is:
+Environment
+    ↓
+cogs/constants.py
+    ↓
+WikiConfig
+    ↓
+WikiClient
+    ↓
+Discord / Telegram adapters
+Configuration should be validated before the bot starts serving requests.
+Caching
+Caching is runtime application state.
+Do not:
+	•	commit cache.pkl;
+	•	use repository cache files as persistent runtime storage;
+	•	copy local cache state into production;
+	•	rely on a cache file being present for startup.
+Runtime cache should remain separate from repository source files.
+Security
+Never commit:
+.env
+DISCORD_BOT_TOKEN
+TELEGRAM_BOT_TOKEN
+API keys
+cookies
+session data
+passwords
+Do not store secrets in JSON, pickle, logs, source code, or deployment artifacts.
+If a token has been exposed, revoke it and create a replacement.
+Removing a secret from the latest commit does not remove it from Git history.
+Wiki access controls must not be bypassed.
+401 and 403 responses should be treated as access-denial responses, not as problems to circumvent.
+Do not add mechanisms for bypassing:
+	•	CAPTCHA;
+	•	WAF;
+	•	authentication;
+	•	authorization;
+	•	rate limits;
+	•	other source-side access controls.
+Wiki Errors
+The Wiki client should handle upstream failures explicitly.
+Relevant cases include:
+401
+403
+404
+429
+5xx
+timeout
+connection errors
+invalid HTML structure
+missing required content
+A change in Wiki HTML structure should result in a diagnostic parsing error rather than silently returning corrupted data.
+Wiki parsing belongs in:
+cogs/page_parsing.py
+Do not duplicate Wiki selectors or parsing logic in Discord or Telegram adapters.
+Rate Limiting and Concurrency
+Discord commands use internal rate limiting.
+Wiki requests use bounded concurrency controlled by:
+WIKI_MAX_CONCURRENCY
+Recommended default:
+4
+Supported configuration range:
+1..10
+Increasing concurrency does not automatically improve performance.
+Excessive concurrency can increase load on the Wiki and lead to more 429 responses.
+Source of Truth
+For deployment:
+Dockerfile
+docker-compose.yml
+start.sh
+requirements.txt
+railway.json
+runtime.txt
+For runtime:
+dsc/bot.py
+tg/bot.py
+cogs/dsc.py
+cogs/tg.py
+cogs/page_parsing.py
+cogs/constants.py
+cogs/txt_processing.py
+For tests:
+tests/test_discord_ui.py
+tests/test_wiki_client.py
+For operational verification:
+SMOKE_TEST.md
+If documentation and the actual configuration disagree, the actual configuration takes precedence. Update the documentation after the runtime configuration changes.
+Troubleshooting
+Bot does not start
+Check:
+python --version
+Python should be 3.12.
+Check the installed dependencies:
+python -c "import discord, aiogram, aiohttp, bs4, lxml; print('Dependencies OK')"
+Check that .env exists and contains the required variables.
+Do not print tokens while troubleshooting.
+Discord commands do not appear
+Check:
+DISCORD_BOT_TOKEN
+DISCORD_GUILD_ID
+For global application commands, allow time for Discord command propagation.
+For development, DISCORD_GUILD_ID can be used for guild-specific synchronization.
+Telegram does not start
+Check:
+TELEGRAM_BOT_TOKEN
+Also verify that another running process is not already polling with the same Telegram bot token.
+Wiki returns 403
+Treat this as access denial.
+Do not add bypass logic.
+Use an authorized API or access method.
+Wiki returns 429
+Check:
+WIKI_MAX_CONCURRENCY
+Review retry behavior and request frequency.
+Do not blindly increase concurrency.
+Wiki structure error
+If the bot reports that the Wiki structure has changed, inspect:
+cogs/page_parsing.py
+and compare the parser selectors with the current HTML structure of the Wiki.
+Do not patch the problem inside the Discord or Telegram adapters.
+One bot stops while the other continues
+The two bots run as separate processes.
+Inspect the logs of the affected entry point:
+dsc/bot.py
+or:
+tg/bot.py
+Look for the first actual traceback rather than a later restart message.
+Contributing
+Before submitting a change:
+python -m unittest discover -s tests -v
+python -m compileall cogs dsc tg tests
+Also verify:
+	•	no secrets are committed;
+	•	.env is not tracked;
+	•	.pyc and __pycache__ are not tracked;
+	•	runtime cache is not tracked;
+	•	existing Discord commands remain available;
+	•	existing Telegram commands remain available;
+	•	the shared WikiClient architecture is preserved;
+	•	no unnecessary architectural changes were introduced.
+Do not change the project architecture simply to reduce the number of lines of code.
+License
+The Castopia Bot source code is licensed under the MIT License.
+See:
+LICENSE.txt
+The MIT License applies to the project source code owned by the copyright holder.
+Content retrieved from or displayed from the Castopia Wiki is subject to the licensing terms and rights of the Wiki and its respective rights holders.
+The bot’s MIT License does not grant additional rights to:
+	•	Wiki content;
+	•	Wiki trademarks;
+	•	logos;
+	•	images;
+	•	third-party text;
+	•	other third-party materials.
+Third-party libraries remain subject to their own licenses and terms.
+Documentation
+	•	Deployment Guide⁠
+	•	Railway Deployment Guide⁠
+	•	Smoke Test⁠
