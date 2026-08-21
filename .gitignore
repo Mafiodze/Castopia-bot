@@ -1,5 +1,58 @@
+# Environment and secrets
 .env
+.env.*
+!.env.example
+
+# Python bytecode and caches
 __pycache__/
+**/__pycache__/
 *.py[cod]
+*.pyd
 .pytest_cache/
-cache.pkl
+.mypy_cache/
+.ruff_cache/
+
+# Test and coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Build and packaging artifacts
+build/
+dist/
+*.egg-info/
+
+# Runtime state and local caches
+*.pkl
+*.pickle
+*.sqlite3
+*.db
+
+# Logs and local runtime output
+*.log
+logs/
+
+# Local virtual environments
+.venv/
+venv/
+env/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS-generated files
+.DS_Store
+.DS_Store?
+Thumbs.db
+Desktop.ini
+
+# Local deployment/debug artifacts
+DEPLOYMENT_SUMMARY.json
+DEPLOYMENT_FILES.txt
+debug_env.py
+prepare_deployment.py

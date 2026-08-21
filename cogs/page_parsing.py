@@ -1,8 +1,8 @@
-"""A polite, cached client for the public Castopia wiki.
+"""Cached, bounded client for the public Castopia wiki.
 
-The client deliberately does not attempt to evade access controls. A 401/403
-response is reported to callers; access must be obtained through an official
-API or the site owner's permission.
+The client intentionally does not bypass access controls. HTTP 401/403 responses
+are surfaced to callers so access must be obtained through an official API or the
+site owner's permission.
 """
 
 from __future__ import annotations
@@ -12,10 +12,11 @@ import logging
 import random
 import re
 from collections import deque
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import timedelta
 from time import monotonic
-from typing import Iterable
+from typing import Generic, TypeVar
 from urllib.parse import unquote, urljoin, urlsplit
 
 import aiohttp
@@ -24,6 +25,9 @@ from bs4 import BeautifulSoup
 from .constants import SYSTEM_TAGS, WikiConfig
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+R = TypeVar("R")
 
 
 class WikiError(RuntimeError):
@@ -55,8 +59,8 @@ class Article:
 
 
 @dataclass(slots=True)
-class _CacheEntry:
-    value: object
+class _CacheEntry(Generic[T]):
+    value: T
     expires_at: float
 
     def is_fresh(self) -> bool:
@@ -69,8 +73,14 @@ class _TagReference:
     url: str
 
 
+@dataclass(slots=True)
+class _UrlLockEntry:
+    lock: asyncio.Lock
+    users: int = 0
+
+
 class WikiClient:
-    """Fetch and parse content with bounded concurrency and short-lived caches."""
+    """Fetch and parse wiki content with bounded concurrency and TTL caches."""
 
     PAGE_CACHE_TTL = timedelta(minutes=10)
     LINK_CACHE_TTL = timedelta(minutes=5)
@@ -78,6 +88,10 @@ class WikiClient:
     REQUEST_ATTEMPTS = 3
     REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=12, connect=4, sock_read=8)
     EDIT_LABELS = frozenset({"edit", "редактировать"})
+
+    MAX_PAGE_CACHE_ENTRIES = 512
+    MAX_ARTICLE_CACHE_ENTRIES = 512
+    MAX_SEARCH_CACHE_ENTRIES = 64
 
     def __init__(self, config: WikiConfig) -> None:
         self.config = config
@@ -89,36 +103,41 @@ class WikiClient:
         self._session: aiohttp.ClientSession | None = None
         self._semaphore = asyncio.Semaphore(config.max_concurrent_requests)
         self._full_search_lock = asyncio.Lock()
-        self._page_cache: dict[str, _CacheEntry] = {}
-        self._article_cache: dict[str, _CacheEntry] = {}
-        self._search_cache: dict[str, _CacheEntry] = {}
-        self._url_locks: dict[str, asyncio.Lock] = {}
-        self._links_cache: _CacheEntry | None = None
-        self._tag_catalog_cache: _CacheEntry | None = None
+        self._page_cache: dict[str, _CacheEntry[str]] = {}
+        self._article_cache: dict[str, _CacheEntry[Article]] = {}
+        self._search_cache: dict[str, _CacheEntry[list[Article]]] = {}
+        self._url_locks: dict[str, _UrlLockEntry] = {}
+        self._links_cache: _CacheEntry[list[tuple[str, str]]] | None = None
+        self._tag_catalog_cache: _CacheEntry[dict[str, list[_TagReference]]] | None = None
 
     async def start(self) -> None:
-        if self._session is None or self._session.closed:
-            connector = aiohttp.TCPConnector(
-                limit=self.config.max_concurrent_requests,
-                limit_per_host=self.config.max_concurrent_requests,
-                enable_cleanup_closed=True,
-            )
-            self._session = aiohttp.ClientSession(
-                connector=connector,
-                timeout=self.REQUEST_TIMEOUT,
-                headers={
-                    "User-Agent": self.config.user_agent,
-                    "Accept": "text/html,application/xhtml+xml",
-                    "Accept-Language": "ru,en;q=0.8",
-                },
-                raise_for_status=False,
-            )
+        """Create the shared HTTP session if it is not already open."""
+        if self._session is not None and not self._session.closed:
+            return
+
+        connector = aiohttp.TCPConnector(
+            limit=self.config.max_concurrent_requests,
+            limit_per_host=self.config.max_concurrent_requests,
+            enable_cleanup_closed=True,
+        )
+        self._session = aiohttp.ClientSession(
+            connector=connector,
+            timeout=self.REQUEST_TIMEOUT,
+            headers={
+                "User-Agent": self.config.user_agent,
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "ru,en;q=0.8",
+            },
+            raise_for_status=False,
+        )
 
     async def close(self) -> None:
+        """Close the shared HTTP session."""
         if self._session is not None and not self._session.closed:
             await self._session.close()
 
     def _normalise_url(self, url: str) -> str:
+        """Return an absolute URL and reject requests outside the wiki origin."""
         absolute = urljoin(f"{self.base_url}/", url)
         parsed = urlsplit(absolute)
         if (parsed.scheme, parsed.netloc) != self._origin:
@@ -127,6 +146,7 @@ class WikiClient:
 
     @staticmethod
     def _is_edit_link(title: str, href: str) -> bool:
+        """Return whether a link points to an edit control rather than an article."""
         path = urlsplit(href).path.casefold().rstrip("/")
         return (
             title.casefold() in WikiClient.EDIT_LABELS
@@ -146,28 +166,69 @@ class WikiClient:
             return ""
         return unquote(path.split(marker, 1)[1]).casefold().strip()
 
+    @staticmethod
+    def _prune_cache(cache: dict[str, _CacheEntry[T]], max_entries: int) -> None:
+        """Drop expired entries and then the oldest entries above the size cap."""
+        now = monotonic()
+        expired = [key for key, entry in cache.items() if entry.expires_at <= now]
+        for key in expired:
+            cache.pop(key, None)
+
+        overflow = len(cache) - max_entries
+        if overflow > 0:
+            for key in list(cache)[:overflow]:
+                cache.pop(key, None)
+
+    def _store_cache(
+        self,
+        cache: dict[str, _CacheEntry[T]],
+        key: str,
+        value: T,
+        ttl: timedelta,
+        max_entries: int,
+    ) -> None:
+        """Store a cache value and keep the cache bounded."""
+        cache[key] = _CacheEntry(value, monotonic() + ttl.total_seconds())
+        self._prune_cache(cache, max_entries)
+
     async def fetch_html(self, url: str) -> str:
-        """Fetch one same-origin page, using a short-lived response cache."""
+        """Fetch one same-origin page using a short-lived response cache."""
         url = self._normalise_url(url)
         cached = self._page_cache.get(url)
         if cached and cached.is_fresh():
-            logger.debug("wiki_fetch cache_hit=true url=%s", url)
-            return str(cached.value)
+            logger.debug("wiki_fetch cache_hit=true")
+            return cached.value
 
-        lock = self._url_locks.setdefault(url, asyncio.Lock())
-        async with lock:
-            cached = self._page_cache.get(url)
-            if cached and cached.is_fresh():
-                logger.debug("wiki_fetch cache_hit=true url=%s", url)
-                return str(cached.value)
-            html = await self._request_html(url)
-            self._page_cache[url] = _CacheEntry(
-                html, monotonic() + self.PAGE_CACHE_TTL.total_seconds()
-            )
-            logger.debug("wiki_fetch cache_hit=false url=%s", url)
-            return html
+        lock_entry = self._url_locks.get(url)
+        if lock_entry is None:
+            lock_entry = _UrlLockEntry(asyncio.Lock())
+            self._url_locks[url] = lock_entry
+        lock_entry.users += 1
+
+        try:
+            async with lock_entry.lock:
+                cached = self._page_cache.get(url)
+                if cached and cached.is_fresh():
+                    logger.debug("wiki_fetch cache_hit=true")
+                    return cached.value
+
+                html = await self._request_html(url)
+                self._store_cache(
+                    self._page_cache,
+                    url,
+                    html,
+                    self.PAGE_CACHE_TTL,
+                    self.MAX_PAGE_CACHE_ENTRIES,
+                )
+                logger.debug("wiki_fetch cache_hit=false")
+                return html
+        finally:
+            lock_entry.users -= 1
+            if lock_entry.users == 0:
+                self._url_locks.pop(url, None)
 
     async def _request_html(self, url: str) -> str:
+        """Fetch HTML with bounded concurrency, retries and structured errors."""
         await self.start()
         assert self._session is not None
 
@@ -179,40 +240,40 @@ class WikiClient:
                     async with self._session.get(url, allow_redirects=True) as response:
                         elapsed_ms = round((monotonic() - started_at) * 1000)
                         logger.debug(
-                            "wiki_request status=%s duration_ms=%s attempt=%s url=%s",
+                            "wiki_request status=%s duration_ms=%s attempt=%s",
                             response.status,
                             elapsed_ms,
                             attempt,
-                            url,
                         )
+
                         if response.status in {401, 403}:
                             raise UpstreamAccessError(
                                 "Источник не разрешает автоматический доступ. Используйте "
                                 "официальный API или запросите разрешение владельца сайта."
                             )
+                        if response.status == 404:
+                            raise UpstreamNotFoundError("Страница больше не существует в источнике.")
                         if response.status == 429 or 500 <= response.status < 600:
                             if attempt == self.REQUEST_ATTEMPTS:
                                 raise UpstreamUnavailableError(
                                     f"Источник временно недоступен (HTTP {response.status})."
                                 )
                             delay = self._retry_delay(response, attempt)
-                        elif response.status == 404:
-                            raise UpstreamNotFoundError("Страница больше не существует в источнике.")
                         elif 400 <= response.status < 500:
                             raise UpstreamUnavailableError(
                                 f"Источник отклонил запрос (HTTP {response.status})."
                             )
                         else:
                             return await response.text(errors="replace")
+
                 await asyncio.sleep(delay)
-            except (UpstreamAccessError, UpstreamUnavailableError):
+            except (UpstreamAccessError, UpstreamNotFoundError, UpstreamUnavailableError):
                 raise
             except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
                 last_error = exc
                 logger.warning(
-                    "wiki_request_failed attempt=%s url=%s error=%s",
+                    "wiki_request_failed attempt=%s error=%s",
                     attempt,
-                    url,
                     type(exc).__name__,
                 )
                 if attempt < self.REQUEST_ATTEMPTS:
@@ -222,6 +283,7 @@ class WikiClient:
 
     @staticmethod
     def _retry_delay(response: aiohttp.ClientResponse, attempt: int) -> float:
+        """Return a bounded retry delay, honoring a valid Retry-After header."""
         retry_after = response.headers.get("Retry-After")
         if retry_after:
             try:
@@ -231,33 +293,25 @@ class WikiClient:
         return min(0.75 * (2 ** (attempt - 1)) + random.random() / 4, 10.0)
 
     async def all_links(self) -> list[tuple[str, str]]:
-        """Return de-duplicated article links from every all-pages listing page.
-        
-        Raises UpstreamContentError if the HTML structure doesn't match expectations,
-        which helps distinguish between "no pages" and "the wiki layout changed".
-        """
+        """Return de-duplicated article links from every all-pages listing page."""
         if self._links_cache and self._links_cache.is_fresh():
-            logger.debug("wiki_links cache_hit=true")
-            return list(self._links_cache.value)  # type: ignore[arg-type]
+            return list(self._links_cache.value)
 
         first_page = await self.fetch_html(self.all_pages_url)
-        
-        # Validate that we have the expected all-pages structure
         soup = BeautifulSoup(first_page, "lxml")
         page_content = soup.select_one("#page-content")
         if page_content is None:
             raise UpstreamContentError(
                 "Источник вернул страницу списка без блока #page-content. "
-                "Структура сайта может измениться."
+                "Структура сайта могла измениться."
             )
-        
-        list_boxes = page_content.select("div.list-pages-box")
-        if not list_boxes:
+
+        if not page_content.select("div.list-pages-box"):
             raise UpstreamContentError(
                 "Источник вернул страницу списка без блоков .list-pages-box. "
                 "Структура сайта могла измениться."
             )
-        
+
         total_pages = self._parse_total_pages(first_page)
         pages = [first_page]
         if total_pages > 1:
@@ -270,55 +324,65 @@ class WikiClient:
         links: list[tuple[str, str]] = []
         for html in pages:
             for title, url in self._parse_list_links(html):
-                if url not in seen:
-                    seen.add(url)
-                    links.append((title, url))
-        
+                if url in seen:
+                    continue
+                seen.add(url)
+                links.append((title, url))
+
         if not links:
             raise UpstreamContentError(
                 "Источник вернул страницы списка со структурой .list-pages-box, "
-                "но валидных ссылок на статьи не найдено. "
-                "Возможно, все ссылки ведут на служебные страницы или их структура изменилась."
+                "но валидных ссылок на статьи не найдено."
             )
 
         self._links_cache = _CacheEntry(
-            links, monotonic() + self.LINK_CACHE_TTL.total_seconds()
+            links,
+            monotonic() + self.LINK_CACHE_TTL.total_seconds(),
         )
-        logger.info("wiki_links count=%s pages=%s cache_hit=false", len(links), total_pages)
         return list(links)
 
-    async def _fetch_in_batches(self, urls: Iterable[str]) -> list[str]:
-        """Fetch listing pages through a bounded worker pool, preserving order.
-        
-        Uses exactly config.max_concurrent_requests workers to avoid overwhelming
-        the source with too many simultaneous requests. Preserves order of URLs.
-        """
-        values = list(urls)
-        if not values:
-            return []
-        
-        pages: list[str | None] = [None] * len(values)
-        pending = deque(enumerate(values))
-        
+    async def _run_bounded(
+        self,
+        values: Iterable[T],
+        operation: Callable[[T], Awaitable[R]],
+        *,
+        log_label: str,
+    ) -> tuple[list[R | None], list[Exception]]:
+        """Run an async operation with bounded workers while preserving input order."""
+        items = list(values)
+        if not items:
+            return [], []
+
+        results: list[R | None] = [None] * len(items)
+        failures: list[Exception] = []
+        pending = deque(enumerate(items))
+
         async def worker() -> None:
             while pending:
-                index, url = pending.popleft()
+                index, value = pending.popleft()
                 try:
-                    pages[index] = await self.fetch_html(url)
+                    results[index] = await operation(value)
                 except Exception as exc:
-                    logger.warning("wiki_fetch_batch_failed index=%s error=%s", index, type(exc).__name__)
-                    pages[index] = None
+                    failures.append(exc)
+                    logger.debug(
+                        "%s item_failed index=%s error=%s",
+                        log_label,
+                        index,
+                        type(exc).__name__,
+                    )
 
-        # Create exactly config.max_concurrent_requests workers
-        worker_count = min(self.config.max_concurrent_requests, len(values))
-        workers = [asyncio.create_task(worker()) for _ in range(worker_count)]
-        if workers:
-            await asyncio.gather(*workers)
-        
-        # Filter out None values and log
-        result = [page for page in pages if page is not None]
-        logger.debug("wiki_fetch_batch_done total=%s success=%s", len(values), len(result))
-        return result
+        worker_count = min(self.config.max_concurrent_requests, len(items))
+        await asyncio.gather(*(asyncio.create_task(worker()) for _ in range(worker_count)))
+        return results, failures
+
+    async def _fetch_in_batches(self, urls: Iterable[str]) -> list[str]:
+        """Fetch listing pages concurrently without exceeding the configured limit."""
+        results, _ = await self._run_bounded(
+            urls,
+            self.fetch_html,
+            log_label="wiki_fetch_batch",
+        )
+        return [page for page in results if page is not None]
 
     @staticmethod
     def _parse_total_pages(html: str) -> int:
@@ -330,21 +394,12 @@ class WikiClient:
         return max(1, int(match.group(1))) if match else 1
 
     def _parse_list_links(self, html: str) -> list[tuple[str, str]]:
-        """Parse all list-page boxes, ignoring empty controls and edit links.
-        
-        Collects links from all .list-pages-box elements within #page-content.
-        De-duplicates and filters out edit links.
-        """
+        """Parse article links from all list-page boxes and omit edit controls."""
         soup = BeautifulSoup(html, "lxml")
         scope = soup.select_one("#page-content") or soup
         links: list[tuple[str, str]] = []
-        boxes = scope.select("div.list-pages-box")
-        
-        # Log diagnostic info about box structure
-        logger.debug("wiki_parse_boxes count=%s", len(boxes))
-        
-        for box_idx, box in enumerate(boxes):
-            box_links_count = 0
+
+        for box in scope.select("div.list-pages-box"):
             for anchor in box.find_all("a", href=True):
                 title = anchor.get_text(" ", strip=True)
                 href = anchor["href"]
@@ -352,20 +407,17 @@ class WikiClient:
                     continue
                 try:
                     links.append((title, self._normalise_url(href)))
-                    box_links_count += 1
                 except ValueError:
-                    logger.debug("wiki_link_skipped reason=off_origin href=%s", href)
-            logger.debug("wiki_parse_box_done box_index=%s links_count=%s", box_idx, box_links_count)
-        
-        logger.debug("wiki_parse_list_links total_links=%s", len(links))
+                    logger.debug("wiki_link_skipped reason=off_origin")
+
         return links
 
     async def get_article(self, title: str, url: str) -> Article:
+        """Fetch, clean and cache one article."""
         url = self._normalise_url(url)
         cached = self._article_cache.get(url)
         if cached and cached.is_fresh():
-            logger.debug("wiki_article cache_hit=true url=%s", url)
-            return cached.value  # type: ignore[return-value]
+            return cached.value
 
         html = await self.fetch_html(url)
         soup = BeautifulSoup(html, "lxml")
@@ -375,30 +427,32 @@ class WikiClient:
                 "Источник вернул страницу без блока #page-content. "
                 "Структура сайта могла измениться."
             )
-        
-        # Remove script, style and other non-content elements
+
         for element in content.select(
             "script, style, noscript, .no-style, .footnoteref, #side-bar"
         ):
             element.decompose()
-        
+
         text = re.sub(r"\s+", " ", content.get_text(" ", strip=True)).strip()
         if not text:
             raise UpstreamContentError(
                 f"Страница '{title}' не содержит доступного текста. "
                 "Возможно, это служебная страница."
             )
-        
+
         tags = frozenset(
             self._tag_identifier(item) or item.get_text(" ", strip=True).casefold()
             for item in soup.select("div.page-tags a")
             if item.get_text(strip=True)
         )
         article = Article(title=title, url=url, text=text, tags=tags)
-        self._article_cache[url] = _CacheEntry(
-            article, monotonic() + self.PAGE_CACHE_TTL.total_seconds()
+        self._store_cache(
+            self._article_cache,
+            url,
+            article,
+            self.PAGE_CACHE_TTL,
+            self.MAX_ARTICLE_CACHE_ENTRIES,
         )
-        logger.debug("wiki_article cache_hit=false url=%s", url)
         return article
 
     @staticmethod
@@ -409,70 +463,63 @@ class WikiClient:
     async def _get_articles_in_batches(
         self, candidates: Iterable[tuple[str, str]]
     ) -> list[Article]:
-        """Fetch and parse articles concurrently with bounded pool.
-        
-        Collects failures separately. If all fail, raises the first WikiError,
-        otherwise raises a generic UpstreamUnavailableError.
-        """
+        """Fetch and parse articles concurrently with bounded workers."""
         values = list(candidates)
         if not values:
             return []
-        
-        articles: list[Article] = []
-        failures: list[BaseException] = []
-        pending = deque(values)
 
-        async def worker() -> None:
-            while pending:
-                title, url = pending.popleft()
-                try:
-                    article = await self.get_article(title, url)
-                    articles.append(article)
-                except Exception as error:
-                    failures.append(error)
-                    logger.debug("wiki_article_failed title=%s error=%s", title, type(error).__name__)
+        async def fetch_article(item: tuple[str, str]) -> Article:
+            return await self.get_article(*item)
 
-        # Create exactly config.max_concurrent_requests workers
-        worker_count = min(self.config.max_concurrent_requests, len(values))
-        workers = [asyncio.create_task(worker()) for _ in range(worker_count)]
-        if workers:
-            await asyncio.gather(*workers)
-        
-        # Handle failures
+        results, failures = await self._run_bounded(
+            values,
+            fetch_article,
+            log_label="wiki_article_batch",
+        )
+        articles = [article for article in results if article is not None]
+
         if not articles and failures:
             first_error = failures[0]
             if isinstance(first_error, WikiError):
                 raise first_error
-            raise UpstreamUnavailableError("Не удалось загрузить статьи из источника.")
-        
-        logger.debug("wiki_articles_batch_done total=%s success=%s failures=%s", 
-                    len(values), len(articles), len(failures))
+            raise UpstreamUnavailableError("Не удалось загрузить статьи из источника.") from first_error
+
         return articles
 
     async def find_by_title(self, query: str) -> Article | None:
+        """Find an article by exact title first, then by partial title match."""
         normalized = query.casefold().strip()
         if not normalized:
             return None
+
         candidates = [
             (title, url)
             for title, url in await self.all_links()
             if self._is_public_candidate(title, url)
         ]
-        exact = next(((t, u) for t, u in candidates if t.casefold() == normalized), None)
+        exact = next(
+            ((title, url) for title, url in candidates if title.casefold() == normalized),
+            None,
+        )
         if exact is None:
-            partial = [(t, u) for t, u in candidates if normalized in t.casefold()]
-            exact = partial[0] if partial else None
+            exact = next(
+                ((title, url) for title, url in candidates if normalized in title.casefold()),
+                None,
+            )
         if exact is None:
             return None
+
         try:
             return await self.get_article(*exact)
         except UpstreamNotFoundError:
             return None
 
     async def title_suggestions(self, query: str, *, limit: int = 25) -> list[str]:
+        """Return up to ``limit`` public article titles matching a query."""
         normalized = query.casefold().strip()
         if not normalized:
             return []
+
         return [
             title
             for title, url in await self.all_links()
@@ -480,15 +527,16 @@ class WikiClient:
         ][:limit]
 
     async def random_article(self) -> Article | None:
+        """Return a random public article, skipping stale or system pages."""
         candidates = [
             item for item in await self.all_links() if self._is_public_candidate(*item)
         ]
         random.shuffle(candidates)
+
         for title, url in candidates[:12]:
             try:
                 article = await self.get_article(title, url)
             except UpstreamNotFoundError:
-                logger.info("wiki_random_skipped reason=not_found url=%s", url)
                 continue
             if article.text and not (article.tags & SYSTEM_TAGS):
                 return article
@@ -496,7 +544,7 @@ class WikiClient:
 
     async def _tag_catalog(self) -> dict[str, list[_TagReference]]:
         if self._tag_catalog_cache and self._tag_catalog_cache.is_fresh():
-            return self._tag_catalog_cache.value  # type: ignore[return-value]
+            return self._tag_catalog_cache.value
 
         html = await self.fetch_html(self.tags_url)
         soup = BeautifulSoup(html, "lxml")
@@ -509,10 +557,13 @@ class WikiClient:
             reference = _TagReference(identifier, self._normalise_url(anchor["href"]))
             for key in {display_name, identifier}:
                 catalog.setdefault(key, []).append(reference)
+
         if not catalog:
             raise UpstreamContentError("Источник не вернул каталог тегов.")
+
         self._tag_catalog_cache = _CacheEntry(
-            catalog, monotonic() + self.LINK_CACHE_TTL.total_seconds()
+            catalog,
+            monotonic() + self.LINK_CACHE_TTL.total_seconds(),
         )
         return catalog
 
@@ -523,19 +574,19 @@ class WikiClient:
             candidates = catalog.get(raw_tag.casefold().strip())
             if not candidates:
                 return None
-            # A short visible tag can occur in several categories. The first
-            # category is stable in the wiki's catalogue; an explicit
-            # "category:tag" input always resolves exactly.
             resolved.append(candidates[0])
         return resolved
 
     async def find_by_tags(self, tags: Iterable[str]) -> list[Article]:
+        """Return public articles containing every requested tag."""
         raw_tags = [tag for tag in tags if tag.strip()]
         if not raw_tags:
             return []
+
         references = await self._resolve_tags(raw_tags)
         if references is None:
             return []
+
         required = {reference.identifier for reference in references}
         html = await self.fetch_html(references[0].url)
         soup = BeautifulSoup(html, "lxml")
@@ -545,7 +596,7 @@ class WikiClient:
                 "Источник не вернул список страниц для выбранного тега. "
                 "Структура сайта может измениться."
             )
-        
+
         candidates: list[tuple[str, str]] = []
         for anchor in scope.select("a[href]"):
             title = anchor.get_text(" ", strip=True)
@@ -556,11 +607,10 @@ class WikiClient:
                 candidates.append((title, self._normalise_url(href)))
             except ValueError:
                 continue
-        
+
         if not candidates:
-            logger.info("wiki_tags_no_candidates tags=%s", raw_tags)
             return []
-        
+
         articles = await self._get_articles_in_batches(candidates)
         return [
             article
@@ -571,72 +621,57 @@ class WikiClient:
         ]
 
     async def search_content(self, query: str, *, limit: int = 50) -> list[Article]:
-        """Full-text search across all public articles.
-        
-        Normalizes query, checks cache, then loads all articles and searches
-        by text and title frequency. Results sorted by relevance.
-        Uses a single lock to serialize concurrent searches.
-        """
+        """Search public articles by text and return relevance-ranked results."""
         normalized = query.casefold().strip()
         if not normalized:
             return []
-        
+
         cached = self._search_cache.get(normalized)
         if cached and cached.is_fresh():
-            logger.debug("wiki_search cache_hit=true query_length=%s", len(normalized))
-            return list(cached.value)[:limit]  # type: ignore[arg-type]
+            return list(cached.value)[:limit]
 
-        # Serialize concurrent searches - only one fulltext search at a time
         async with self._full_search_lock:
-            # Double-check cache after acquiring lock
             cached = self._search_cache.get(normalized)
             if cached and cached.is_fresh():
-                logger.debug("wiki_search cache_hit=true query_length=%s", len(normalized))
-                return list(cached.value)[:limit]  # type: ignore[arg-type]
-            
+                return list(cached.value)[:limit]
+
             started_at = monotonic()
-            
-            # Get all public candidates
             candidates = [
                 item
                 for item in await self.all_links()
                 if self._is_public_candidate(*item)
             ]
-            logger.debug("wiki_search candidates_found=%s query_length=%s", len(candidates), len(normalized))
-            
-            # Fetch and parse all articles
             articles = await self._get_articles_in_batches(candidates)
-            
-            # Filter by text match and system tags
+
+            query_casefold = normalized
             found = [
                 article
                 for article in articles
-                if normalized in article.text.casefold()
+                if query_casefold in article.text.casefold()
                 and not (article.tags & SYSTEM_TAGS)
             ]
-            
-            # Sort by relevance: first by frequency (text + title), then alphabetically
-            found.sort(
-                key=lambda item: (
-                    item.text.casefold().count(normalized)
-                    + 10 * (normalized in item.title.casefold()),
-                    item.title.casefold(),
-                ),
-                reverse=True,
+
+            def relevance(article: Article) -> int:
+                score = article.text.casefold().count(query_casefold)
+                if query_casefold in article.title.casefold():
+                    score += 10
+                return score
+
+            found.sort(key=lambda article: (-relevance(article), article.title.casefold()))
+            self._store_cache(
+                self._search_cache,
+                normalized,
+                found,
+                self.SEARCH_CACHE_TTL,
+                self.MAX_SEARCH_CACHE_ENTRIES,
             )
-            
-            # Cache results
-            self._search_cache[normalized] = _CacheEntry(
-                found, monotonic() + self.SEARCH_CACHE_TTL.total_seconds()
-            )
-            
-            elapsed_ms = round((monotonic() - started_at) * 1000)
+
             logger.info(
                 "wiki_search cache_hit=false query_length=%s articles_loaded=%s "
                 "result_count=%s duration_ms=%s",
                 len(normalized),
                 len(articles),
                 len(found),
-                elapsed_ms,
+                round((monotonic() - started_at) * 1000),
             )
             return found[:limit]

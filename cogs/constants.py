@@ -1,4 +1,4 @@
-"""Project-wide configuration for the Castopia bots."""
+"""Validated shared configuration for the Castopia bots."""
 
 from __future__ import annotations
 
@@ -6,11 +6,10 @@ import os
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-
 DEFAULT_WIKI_BASE_URL = "https://castopia.site"
 DEFAULT_USER_AGENT = "CastopiaBot/2.0 (community reader; configure WIKI_USER_AGENT)"
 
-# Pages bearing any of these tags are omitted from public random/search results.
+# Pages with these tags are hidden from public random and search results.
 SYSTEM_TAGS = frozenset(
     {
         "структура:компонент",
@@ -23,6 +22,10 @@ SYSTEM_TAGS = frozenset(
 )
 
 FOOTER_TEXT = "Содержимое распространяется по лицензии CC BY-SA 3.0"
+
+_MIN_CONCURRENCY = 1
+_MAX_CONCURRENCY = 10
+_DEFAULT_CONCURRENCY = 4
 
 
 class ConfigurationError(ValueError):
@@ -39,35 +42,79 @@ class WikiConfig:
 
     @property
     def all_pages_url(self) -> str:
+        """Return the configured all-pages endpoint."""
         return f"{self.base_url}/system:all-pages"
 
     @property
     def tags_url(self) -> str:
+        """Return the configured tag catalogue endpoint."""
         return f"{self.base_url}/system:page-tags"
 
 
-def load_wiki_config() -> WikiConfig:
-    """Load public wiki settings and reject malformed or unsafe source URLs."""
-    raw_url = os.getenv("WIKI_BASE_URL", DEFAULT_WIKI_BASE_URL).strip().rstrip("/")
-    parsed = urlsplit(raw_url)
-    if parsed.scheme != "https" or not parsed.netloc or parsed.query or parsed.fragment:
+def _load_https_base_url() -> str:
+    """Read and validate the public wiki base URL from the environment."""
+    value = os.getenv("WIKI_BASE_URL", DEFAULT_WIKI_BASE_URL).strip().rstrip("/")
+    parsed = urlsplit(value)
+
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.port is not None
+    ):
         raise ConfigurationError(
-            "WIKI_BASE_URL must be an absolute HTTPS URL, for example https://castopia.site"
+            "WIKI_BASE_URL must be an absolute HTTPS URL without path, "
+            "query, fragment or embedded credentials, for example "
+            "https://castopia.site"
         )
 
-    try:
-        concurrency = int(os.getenv("WIKI_MAX_CONCURRENCY", "4"))
-    except ValueError as exc:
-        raise ConfigurationError("WIKI_MAX_CONCURRENCY must be an integer") from exc
-    if not 1 <= concurrency <= 10:
-        raise ConfigurationError("WIKI_MAX_CONCURRENCY must be between 1 and 10")
+    return value
 
-    user_agent = os.getenv("WIKI_USER_AGENT", DEFAULT_USER_AGENT).strip()
-    if not user_agent:
+
+def _load_concurrency() -> int:
+    """Read and validate the maximum number of concurrent wiki requests."""
+    raw_value = os.getenv(
+        "WIKI_MAX_CONCURRENCY",
+        str(_DEFAULT_CONCURRENCY),
+    ).strip()
+
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ConfigurationError(
+            "WIKI_MAX_CONCURRENCY must be an integer"
+        ) from exc
+
+    if not _MIN_CONCURRENCY <= value <= _MAX_CONCURRENCY:
+        raise ConfigurationError(
+            "WIKI_MAX_CONCURRENCY must be between "
+            f"{_MIN_CONCURRENCY} and {_MAX_CONCURRENCY}"
+        )
+
+    return value
+
+
+def _load_user_agent() -> str:
+    """Read and validate the HTTP User-Agent used for public requests."""
+    value = os.getenv(
+        "WIKI_USER_AGENT",
+        DEFAULT_USER_AGENT,
+    ).strip()
+
+    if not value:
         raise ConfigurationError("WIKI_USER_AGENT cannot be empty")
 
+    return value
+
+
+def load_wiki_config() -> WikiConfig:
+    """Load, validate and return the public wiki configuration."""
     return WikiConfig(
-        base_url=raw_url,
-        user_agent=user_agent,
-        max_concurrent_requests=concurrency,
+        base_url=_load_https_base_url(),
+        user_agent=_load_user_agent(),
+        max_concurrent_requests=_load_concurrency(),
     )
