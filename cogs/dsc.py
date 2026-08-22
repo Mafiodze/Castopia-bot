@@ -102,7 +102,10 @@ class SearchResultsView(discord.ui.View):
     @property
     def total_pages(self) -> int:
         """Return the number of result pages."""
-        return max(1, (len(self.results) + RESULTS_PER_PAGE - 1) // RESULTS_PER_PAGE)
+        return max(
+            1,
+            (len(self.results) + RESULTS_PER_PAGE - 1) // RESULTS_PER_PAGE,
+        )
 
     def _update_buttons(self) -> None:
         self.previous_page.disabled = self.page <= 1
@@ -169,7 +172,10 @@ class SearchResultsView(discord.ui.View):
         await self._refresh(interaction)
 
     async def on_timeout(self) -> None:
-        self.disable_all_items()
+        for item in self.children:
+            if hasattr(item, "disabled"):
+                item.disabled = True
+
         if self.message is None:
             return
 
@@ -239,9 +245,10 @@ class DscCog(commands.Cog):
         error: Exception,
     ) -> None:
         if not isinstance(error, WikiError):
-            logger.exception(
+            logger.error(
                 "discord_command_failed error=%s",
                 type(error).__name__,
+                exc_info=error,
             )
 
         text = self._error_text(error)
@@ -338,9 +345,10 @@ class DscCog(commands.Cog):
         text = self._error_text(original)
 
         if not isinstance(original, WikiError):
-            logger.exception(
+            logger.error(
                 "discord_app_command_failed error=%s",
                 type(original).__name__,
+                exc_info=original,
             )
 
         await self._send_interaction_error(interaction, text)
@@ -386,7 +394,10 @@ class DscCog(commands.Cog):
             )
             return
 
-        await self._send_command_result(ctx, embed=_article_embed(article))
+        await self._send_command_result(
+            ctx,
+            embed=_article_embed(article),
+        )
 
     @commands.hybrid_command(
         name="search",
@@ -514,7 +525,10 @@ class DscCog(commands.Cog):
 
         articles = cast(list[Article], result)
         if not articles:
-            await self._send_command_result(ctx, "По этим тегам ничего не найдено.")
+            await self._send_command_result(
+                ctx,
+                "По этим тегам ничего не найдено.",
+            )
             return
 
         embed = discord.Embed(
@@ -582,6 +596,7 @@ class DscCog(commands.Cog):
             embed=view.create_embed(),
             view=view,
         )
+
         if isinstance(message, (discord.Message, discord.WebhookMessage)):
             view.message = message
 
@@ -593,31 +608,30 @@ class DscCog(commands.Cog):
         embed: discord.Embed | None = None,
         view: discord.ui.View | None = None,
     ) -> discord.Message | discord.WebhookMessage | None:
-        """Send a command result through the correct Discord response channel."""
+        """Send a command result without passing an invalid null View."""
         interaction = ctx.interaction
+        send_kwargs: dict[str, object] = {
+            "embed": embed,
+        }
+
+        if content is not None:
+            send_kwargs["content"] = content
+
+        if view is not None:
+            send_kwargs["view"] = view
 
         try:
             if interaction is not None:
                 if interaction.response.is_done():
                     return await interaction.followup.send(
-                        content=content,
-                        embed=embed,
-                        view=view,
                         wait=True,
+                        **send_kwargs,
                     )
 
-                await interaction.response.send_message(
-                    content=content,
-                    embed=embed,
-                    view=view,
-                )
+                await interaction.response.send_message(**send_kwargs)
                 return None
 
-            return await ctx.send(
-                content,
-                embed=embed,
-                view=view,
-            )
+            return await ctx.send(**send_kwargs)
         except discord.HTTPException:
             logger.exception("discord_command_result_send_failed")
             return None
